@@ -9,6 +9,14 @@ The demo spec (`examples/specs/demo-controls.md`) has three steps: pick an optio
 
 Run these commands from the Reverie clone, or copy the spec into your own project.
 
+Set your OpenRouter key first. It covers the default Jev decision engine, the pilot, and the text model:
+
+```bash
+export OPENROUTER_API_KEY=your-openrouter-key   # or put it in a .env file
+```
+
+Without a key, `start` refuses to run and tells you what to set. To decide locally and offline instead, use Laya (laya.cpp or MLX): `REVERIE_DECISION_ENGINE=laya`. See [Models and providers](/reverie/reference/models/#decision-engines).
+
 ## 1. Create the project folder
 
 ```bash

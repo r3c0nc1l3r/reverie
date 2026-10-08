@@ -45,7 +45,8 @@
   .cp { margin:6px 0; } .cp .st { font-weight:700; } .cp .st.pending { color:#d2a8ff; } .cp .st.done { color:var(--pass); }
   .cp .st.failed { color:var(--fail); } .cp .st.skipped { color:var(--muted); }
   .layer { font-size:11px; padding:1px 6px; border-radius:999px; margin-right:4px; background:var(--line); }
-  .layer.laya { background:#12361d; color:#7ee787; } .layer.mercury { background:#3b2a5c; color:#d2a8ff; }
+  .layer.decision, .layer.laya, .layer.jev { background:#12361d; color:#7ee787; }
+  .layer.escalation, .layer.mercury { background:#3b2a5c; color:#d2a8ff; }
   .layer.agent { background:#4a3510; color:var(--amber); }
   pre.plan { white-space:pre-wrap; margin:0; font-size:12px; color:var(--muted); max-height:180px; overflow:auto; }
 </style>
@@ -100,7 +101,7 @@
       if (s.caption) { $("caption").textContent = s.caption; $("caption").className = ""; }
       if (s.frame && s.frame !== lastFrame) { $("frame").src = `data:image/jpeg;base64,${s.frame}`; lastFrame = s.frame; }
       $("history").innerHTML = s.history.map((h) =>
-        `<li><span class="layer ${esc(h.by)}">${esc(h.by)}</span><small>${esc(h.kind)}</small> ${esc(h.label)} ` +
+        `<li><span class="layer ${esc(h.by)}">${esc(h.by === "decision" && h.decision_engine ? `decision · ${h.decision_engine}` : h.by)}</span><small>${esc(h.kind)}</small> ${esc(h.label)} ` +
         `${h.text ? `<small>“${esc(h.text)}”</small>` : ""}${h.escalation ? ` <small>(escalated: ${esc(h.escalation)})</small>` : ""}</li>`).join("");
       $("layers").textContent = s.layers ? Object.entries(s.layers).map(([k, v]) => `${k} ${v}`).join(" · ") : "";
       $("admin").hidden = !(s.checkpoints && s.checkpoints.length);
@@ -131,7 +132,7 @@
         $("goal-plan").hidden = !s.goal_plan;
         if (s.goal_plan) $("goal-plan").textContent = JSON.stringify(s.goal_plan, null, 2);
         const q = s.pending;
-        $("pending").innerHTML = q ? `Proposed by <b>${esc(q.layer || q.engine)}</b>${q.escalation ? ` (escalated: ${esc(q.escalation)})` : ""} (${Math.round(q.confidence * 100)}%, ${q.latency_ms} ms): ` +
+        $("pending").innerHTML = q ? `Proposed by <b>${esc(q.layer === "decision" && q.decision_engine ? `decision engine · ${q.decision_engine}` : (q.layer || q.engine))}</b>${q.escalation ? ` (escalated: ${esc(q.escalation)})` : ""} (${Math.round(q.confidence * 100)}%, ${q.latency_ms} ms): ` +
           `${esc(q.label)}${q.reason ? ` — <i>${esc(q.reason)}</i>` : ""}` : "";
         $("hints").textContent = s.hints && s.hints.length ? `Steering: ${s.hints.join(" · ")}` : "";
       }

@@ -83,7 +83,7 @@ RUN chmod 0755 /usr/local/bin/reverie-entrypoint /usr/local/bin/reverie-chromium
 ENV PATH=/opt/reverie/venv/bin:$PATH \
     HOME=/home/reverie \
     XDG_RUNTIME_DIR=/runtime \
-    LAYA_AGENT_BROWSER=/usr/local/bin/reverie-chromium \
+    REVERIE_BROWSER=/usr/local/bin/reverie-chromium \
     REVERIE_DOWNLOAD_DIR=/downloads \
     REVERIE_GPU=auto \
     REVERIE_AUDIO=auto

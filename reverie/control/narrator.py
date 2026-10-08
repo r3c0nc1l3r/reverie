@@ -10,6 +10,8 @@ import threading
 import time
 import wave
 
+from ..settings import setting
+
 VOICES = ("auto", "kitten", "kokoro", "fish", "espeak", "spd", "off")
 PLAYERS = (["pw-play", "-"], ["paplay"], ["mpv", "--really-quiet", "--no-video", "-"])
 
@@ -73,16 +75,16 @@ def player():
 class Narrator:
     def __init__(self, voice="auto", rate=None):
         self.voice = resolve_voice(voice)
-        self.rate = rate or int(os.environ.get("LAYA_AGENT_SPEECH_RATE", "185"))
+        self.rate = rate or int(setting("REVERIE_SPEECH_RATE", "185"))
         self.spoken = []
         self._queue = queue.Queue()
         self._idle = threading.Event()
         self._idle.set()
-        # Bluetooth audio mode (LAYA_AGENT_BLUETOOTH_AUDIO=1, `start --bluetooth`, or `audio --bluetooth on`):
-        # play LAYA_AGENT_AUDIO_WAKE seconds of near-silent audio before speech that follows an idle gap.
-        self.bluetooth = os.environ.get("LAYA_AGENT_BLUETOOTH_AUDIO", "0").lower() in {"1", "true", "on", "yes"}
-        self.wake_seconds = float(os.environ.get("LAYA_AGENT_AUDIO_WAKE", "1.2"))
-        self.wake_after_idle = float(os.environ.get("LAYA_AGENT_AUDIO_WAKE_IDLE", "4"))
+        # Bluetooth audio mode (REVERIE_BLUETOOTH_AUDIO=1, `start --bluetooth`, or `audio --bluetooth on`):
+        # play REVERIE_AUDIO_WAKE seconds of near-silent audio before speech that follows an idle gap.
+        self.bluetooth = setting("REVERIE_BLUETOOTH_AUDIO", "0").lower() in {"1", "true", "on", "yes"}
+        self.wake_seconds = float(setting("REVERIE_AUDIO_WAKE", "1.2"))
+        self.wake_after_idle = float(setting("REVERIE_AUDIO_WAKE_IDLE", "4"))
         self.last_audio = 0.0
         self._thread = threading.Thread(target=self._worker, daemon=True)
         self._thread.start()

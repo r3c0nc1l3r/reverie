@@ -71,6 +71,10 @@ def validate_choice(answer, ids):
     return answer
 
 
+class MissingKey(ValueError):
+    """Jev was chosen (it is the default decision engine) but no OpenRouter key is configured."""
+
+
 def openrouter_key():
     """Use a dedicated key when set, or the existing OpenRouter text-helper key."""
     key = os.environ.get("OPENROUTER_API_KEY")
@@ -78,8 +82,10 @@ def openrouter_key():
     if not key and (urlparse(text_base).hostname or "").lower() == "openrouter.ai":
         key = os.environ.get("TEXT_MODEL_API_KEY")
     if not key:
-        raise ValueError(
-            "Jev needs OPENROUTER_API_KEY, or TEXT_MODEL_API_KEY with TEXT_MODEL_BASE_URL set to OpenRouter."
+        raise MissingKey(
+            "Jev, the default decision engine, needs an OpenRouter key. Set OPENROUTER_API_KEY (or TEXT_MODEL_API_KEY "
+            "with TEXT_MODEL_BASE_URL on OpenRouter), or use the local Laya engine: REVERIE_DECISION_ENGINE=laya or "
+            "reverie start --engine laya."
         )
     return key
 
@@ -242,11 +248,11 @@ def endpoint(role="text"):
     """(base URL, API key, provider) for one model role.
 
     The text model reads TEXT_MODEL_PROVIDER, TEXT_MODEL_BASE_URL and TEXT_MODEL_API_KEY. The pilot reads
-    LAYA_AGENT_PILOT_PROVIDER, LAYA_AGENT_PILOT_BASE_URL and LAYA_AGENT_PILOT_API_KEY, and falls back to the
+    REVERIE_PILOT_PROVIDER, REVERIE_PILOT_BASE_URL and REVERIE_PILOT_API_KEY (old names: LAYA_AGENT_PILOT_*), and falls back to the
     text model's settings for any it does not set. A provider (openrouter, opencode-go, deepseek) gives the
     base URL; opencode-go and openrouter also find their own key (OpenCode's auth.json, $OPENROUTER_API_KEY).
     An explicit base URL or key always wins."""
-    prefixes = ["LAYA_AGENT_PILOT_", "TEXT_MODEL_"] if role == "pilot" else ["TEXT_MODEL_"]
+    prefixes = ["REVERIE_PILOT_", "LAYA_AGENT_PILOT_", "TEXT_MODEL_"] if role == "pilot" else ["TEXT_MODEL_"]
 
     def first(name):
         for prefix in prefixes:
@@ -289,7 +295,7 @@ def chat_json(system, context, model=None, max_tokens=1024, reasoning_effort=Non
     `model` overrides TEXT_MODEL for one call; `role="pilot"` uses the pilot's endpoint (see `endpoint`)."""
     base, key, provider = endpoint(role)
     if not key and not local_endpoint(base):
-        raise ValueError("The text model needs TEXT_MODEL_API_KEY (or LAYA_AGENT_PILOT_API_KEY, or an opencode-go "
+        raise ValueError("The text model needs TEXT_MODEL_API_KEY (or REVERIE_PILOT_API_KEY, or an opencode-go "
                          "key); no text is hardcoded or guessed by the executor.")
     model = model or os.environ.get("TEXT_MODEL", "deepseek-chat")
     reasoning = reasoning_options(base, provider, reasoning_effort)

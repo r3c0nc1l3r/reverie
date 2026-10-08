@@ -96,7 +96,7 @@ def serve(args):
     # browser_harness reads BU_NAME at import time, and importing this package imports it. The CLI therefore
     # sets BU_NAME in this process's environment at spawn; refuse to share the default daemon by accident.
     if os.environ.get("BU_NAME") != daemon_name(args.name):
-        raise RuntimeError("Start sessions with `laya-agent start` so the browser daemon gets its own name")
+        raise RuntimeError("Start sessions with `reverie start` so the browser daemon gets its own name")
     from . import downloads
 
     download_dir = downloads.resolve(args.download_dir)
@@ -123,7 +123,7 @@ def serve(args):
             self.wfile.write(body)
 
         def do_GET(self):
-            # Read-only watch page for a person; the token travels in the URL that `laya-agent ui` opens.
+            # Read-only watch page for a person; the token travels in the URL that `reverie ui` opens.
             url = urlparse(self.path)  # Loopback only; the read-only watch pages need no token.
             if url.path == "/watch":
                 page = (Path(__file__).with_name("watch.html").read_text().replace("__TOKEN__", token)).encode()
@@ -206,7 +206,7 @@ def serve(args):
 
 
 def main(argv=None):
-    parser = argparse.ArgumentParser(prog="laya-agent-server")
+    parser = argparse.ArgumentParser(prog="reverie-server")
     parser.add_argument("--name", default="default")
     parser.add_argument("--url", required=True)
     parser.add_argument("--voice", default="auto")
@@ -220,7 +220,7 @@ def main(argv=None):
     try:
         serve(args)
     except Exception as error:
-        print(f"laya-agent: session failed to start: {error}", file=sys.stderr, flush=True)
+        print(f"reverie: session failed to start: {error}", file=sys.stderr, flush=True)
         raise SystemExit(1)
 
 

@@ -1,6 +1,5 @@
 """A dedicated Chromium window for one control session. The user's own browser profile is never touched."""
 
-import os
 import shutil
 import socket
 import subprocess
@@ -9,22 +8,23 @@ from pathlib import Path
 
 import httpx
 
+from ..settings import setting
 from . import downloads
 
 CANDIDATES = ("chromium", "google-chrome-stable", "google-chrome", "brave", "chromium-browser")
 
 
 def find_browser():
-    configured = os.environ.get("LAYA_AGENT_BROWSER", "").strip()
+    configured = setting("REVERIE_BROWSER", "").strip()
     if configured:
         path = shutil.which(configured) or configured
         if not Path(path).exists():
-            raise RuntimeError(f"LAYA_AGENT_BROWSER={configured} was not found")
+            raise RuntimeError(f"REVERIE_BROWSER={configured} was not found")
         return path
     for name in CANDIDATES:
         if path := shutil.which(name):
             return path
-    raise RuntimeError("No Chromium-family browser found. Set LAYA_AGENT_BROWSER.")
+    raise RuntimeError("No Chromium-family browser found. Set REVERIE_BROWSER.")
 
 
 def free_port():

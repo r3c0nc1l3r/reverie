@@ -21,6 +21,7 @@ from urllib.parse import parse_qs, urlparse
 
 import httpx
 
+from ..settings import setting
 from .project import cache_dir, run_roots
 from .server import load_environment, state_dir
 
@@ -96,6 +97,9 @@ def parse_trail(path):
         item["type"] = event
         if event == "act":
             item["by"] = "orchestrator" if item.get("by") in (None, "agent") else item["by"]
+            if item["by"] in LEGACY_LAYERS:  # runs from before the role names: laya/jev -> decision, mercury
+                item.setdefault("decision_engine", item["by"] if item["by"] != "mercury" else None)
+                item["by"] = LEGACY_LAYERS[item["by"]]
             by_step[record.get("step")] = item
             if record.get("step") in pending_before:
                 item["before"] = pending_before.pop(record.get("step"))
@@ -237,7 +241,16 @@ def index(roots):
     return {"suites": out, "live": [{"session": i["name"], "dir": d} for d, i in live.items()]}
 
 
-WHO = {"laya": "Laya", "mercury": "Mercury", "pilot": "Pilot", "orchestrator": "Claude", "jev": "Jev"}
+LEGACY_LAYERS = {"laya": "decision", "jev": "decision", "mercury": "escalation"}
+WHO = {"decision": "Decision engine", "escalation": "Escalation model", "pilot": "Pilot", "orchestrator": "Claude"}
+ENGINES = {"jev": "Jev", "laya": "Laya"}
+
+
+def who_label(event):
+    """'Decision engine · Jev', 'Escalation model', 'Pilot', ... for an act event (old or new names)."""
+    label = WHO.get(event.get("by"), event.get("by"))
+    engine = ENGINES.get(event.get("decision_engine"))
+    return f"{label} · {engine}" if event.get("by") == "decision" and engine else label
 
 
 def slides_for(run):
@@ -266,7 +279,7 @@ def slides_for(run):
             if not line.startswith(("Check ", "Pausing", "Waiting for", "Paused", "Pilot paused")):
                 said = line
         elif t == "act":
-            who = WHO.get(e.get("by"), e.get("by"))
+            who = who_label(e)
             text = f" “{e['text']}”" if e.get("text") else ""
             add({"kind": "target", "caption": f"{who} will {e.get('kind')} {e.get('label', '')}{text}",
                  "by": e.get("by")}, e.get("before"))
@@ -413,7 +426,7 @@ def serve(args):
             token = None
     token = token or secrets.token_urlsafe(18)
     page = Path(__file__).with_name("dashboard.html")
-    bluetooth = "true" if os.environ.get("LAYA_AGENT_BLUETOOTH_AUDIO", "0").lower() in {"1", "true", "on", "yes"} \
+    bluetooth = "true" if setting("REVERIE_BLUETOOTH_AUDIO", "0").lower() in {"1", "true", "on", "yes"} \
         else "false"
 
     class Handler(BaseHTTPRequestHandler):
@@ -509,7 +522,7 @@ def serve(args):
 def main(argv=None):
     parser = argparse.ArgumentParser(prog="reverie-dashboard")
     parser.add_argument("--root", action="append", default=[])
-    parser.add_argument("--port", type=int, default=int(os.environ.get("LAYA_AGENT_UI_PORT", "7788")))
+    parser.add_argument("--port", type=int, default=int(setting("REVERIE_UI_PORT", "7788")))
     args = parser.parse_args(argv)
     args.root = args.root or [str(r) for r in run_roots()]
     load_environment()  # Narration playback uses the same speech provider and voice as the sessions.

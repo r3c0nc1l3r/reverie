@@ -5,7 +5,7 @@ the PulseAudio client tools. It runs headless or headed, with or without audio, 
 
 Reverie does not depend on Playwright. Reverie starts Chromium itself and talks to it over CDP. The image uses
 Playwright only to install a Chromium build for both amd64 and arm64. `reverie-chromium` is a wrapper that adds the
-container flags. The image sets `LAYA_AGENT_BROWSER` to it.
+container flags. The image sets `REVERIE_BROWSER` to it.
 
 ## Quick start
 

@@ -52,7 +52,7 @@
   .timeline li.has-frame { cursor:pointer; } .timeline li.has-frame:hover { background:var(--panel2); }
   .timeline li.sel { background:#1f3a5f; } .timeline li.setup { opacity:.65; }
   .layer { font-size:11px; padding:1px 6px; border-radius:999px; margin-right:4px; background:var(--line); }
-  .layer.laya { background:#12361d; color:var(--green); } .layer.mercury { background:#3b2a5c; color:var(--violet); }
+  .layer.decision { background:#12361d; color:var(--green); } .layer.escalation { background:#3b2a5c; color:var(--violet); }
   .layer.orchestrator { background:#4a3510; color:var(--amber); } .layer.pilot { background:#0f3b44; color:#79e2f2; }
   .ev { font-size:11px; text-transform:uppercase; color:var(--muted); margin-right:4px; }
   .recap { color:var(--text); font-style:italic; } .cam { color:var(--muted); font-size:11px; }
@@ -128,7 +128,11 @@ const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
 const api = (path) => fetch(path, {cache:"no-store"}).then((r) => r.json());
 const marks = { pending:"○", running:"▶", pass:"✓", fail:"✗", blocked:"!", skipped:"–" };
-const who = { laya:"Laya", mercury:"Mercury", pilot:"Pilot", orchestrator:"Claude", jev:"Jev" };
+const who = { decision:"Decision engine", escalation:"Escalation model", pilot:"Pilot", orchestrator:"Claude",
+  laya:"Decision engine · Laya", jev:"Decision engine · Jev", mercury:"Escalation model" };  // last three: older runs
+const engines = { jev:"Jev", laya:"Laya" };
+const layerClass = (by) => ({ laya:"decision", jev:"decision", mercury:"escalation" })[by] || by;
+const whoOf = (e) => e.by === "decision" && engines[e.decision_engine] ? `${who.decision} · ${engines[e.decision_engine]}` : (who[e.by] || e.by);
 const time = (t) => (t || "").slice(11, 16);
 let data = null, selected = null, run = null, open = new Set(), pinned = null, events = [], promptId = null;
 
@@ -161,7 +165,7 @@ function frameUrl(file) { return `/api/frame?dir=${encodeURIComponent(run.dir)}&
 
 function describe(e) {
   const t = e.type;
-  if (t === "act") return `<span class="layer ${esc(e.by)}">${esc(who[e.by] || e.by)}</span><small>${esc(e.kind)}</small> ${esc(e.label)}` +
+  if (t === "act") return `<span class="layer ${esc(layerClass(e.by))}">${esc(whoOf(e))}</span><small>${esc(e.kind)}</small> ${esc(e.label)}` +
     (e.text ? ` <small>“${esc(e.text)}”</small>` : "") + (e.escalation ? ` <small>(escalated: ${esc(e.escalation)})</small>` : "");
   if (t === "check") return `<span class="ev">check</span>` + (e.results || []).map((r) =>
     `<span class="${r.pass ? "pass" : "fail"}">${r.pass ? "PASS" : "FAIL"}</span> ${esc(r.check)}`).join("; ");
@@ -222,7 +226,7 @@ function renderRun() {
   if (now && now.goal) {
     $("goal-text").textContent = now.goal;
     const q = now.pending;
-    $("pending").innerHTML = q ? `Proposed by <b>${esc(who[q.layer] || q.layer)}</b> (${Math.round(q.confidence * 100)}%): ${esc(q.label)}` : "";
+    $("pending").innerHTML = q ? `Proposed by <b>${esc(whoOf({ by: q.layer, decision_engine: q.decision_engine }))}</b> (${Math.round(q.confidence * 100)}%): ${esc(q.label)}` : "";
     $("hints").textContent = now.hints && now.hints.length ? `Steering: ${now.hints.join(" · ")}` : "";
   }
   const p = now && now.prompt; $("prompt").hidden = !p;

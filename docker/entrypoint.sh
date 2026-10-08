@@ -45,7 +45,7 @@ if [ "${REVERIE_DOCKER_DOCTOR:-0}" = "1" ] || [ "${1:-}" = "doctor" ]; then
     echo "audio:      $audio (PULSE_SERVER=${PULSE_SERVER:-unset}) speech=${SPEECH_PROVIDER:-default}"
     echo "gpu:        REVERIE_GPU=${REVERIE_GPU:-auto}"; ls -l /dev/dri 2>/dev/null | sed 's/^/            /' || echo "            no /dev/dri"
     echo "downloads:  ${REVERIE_DOWNLOAD_DIR:-/downloads} ($( [ -w "${REVERIE_DOWNLOAD_DIR:-/downloads}" ] && echo writable || echo NOT writable))"
-    echo "browser:    ${LAYA_AGENT_BROWSER:-unset}"
+    echo "browser:    ${REVERIE_BROWSER:-unset}"
     if command -v vainfo >/dev/null 2>&1 && [ -e /dev/dri/renderD128 ]; then
         vainfo 2>&1 | sed -n '1,12p' | sed 's/^/vainfo:     /'
     fi

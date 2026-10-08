@@ -11,8 +11,8 @@ Reverie is a Python package. It is not on PyPI, so you install it from its [GitH
 |---|---|
 | Python 3.12 or newer | The package declares `requires-python = ">=3.12"`. |
 | A Chromium-family browser | Reverie opens its own browser window for each session. |
-| A model API key | The pilot (the multimodal model that runs your spec) calls an OpenAI-compatible chat API, such as OpenRouter. A local endpoint needs no key. |
-| A laya.cpp server | Makes each click and keystroke locally. Only needed for commands that let the stack decide, such as `do`, `suggest`, and the pilot. |
+| An OpenRouter API key | One `OPENROUTER_API_KEY` covers the default setup: the Jev decision engine, the pilot (the multimodal model that runs your spec), and the text model. |
+| A laya.cpp server (optional) | Only for local, offline decisions with the Laya engine (`REVERIE_DECISION_ENGINE=laya`). The default needs none. |
 
 ### Browser
 
@@ -20,21 +20,26 @@ Reverie starts a dedicated browser with a fresh profile per session. It never to
 
 `chromium`, `google-chrome-stable`, `google-chrome`, `brave`, `chromium-browser`
 
-To use another browser, set `LAYA_AGENT_BROWSER` to its name or full path:
+To use another browser, set `REVERIE_BROWSER` to its name or full path:
 
 ```bash
-export LAYA_AGENT_BROWSER=/path/to/chrome
+export REVERIE_BROWSER=/path/to/chrome
 ```
 
 If the variable points to a file that does not exist, or no browser is found, the session fails to start. See [Troubleshooting](/reverie/help/troubleshooting/).
 
-### laya.cpp
-
-Reverie talks to a local laya.cpp server over HTTP. The default address is `http://127.0.0.1:8080`. Change it with `LAYA_BASE_URL`. You build and run laya.cpp yourself; see [Optional services](#optional-services) for a helper script.
-
 ### Model API key
 
-Create a key with your provider, for example at [openrouter.ai](https://openrouter.ai), and put it in a `.env` file (see [Configure](#configure)).
+Create an OpenRouter key at [openrouter.ai](https://openrouter.ai) and put it in a `.env` file (see [Configure](#configure)). Without a key, a session that uses the default Jev engine refuses to start and tells you how to fix it.
+
+### Local Laya (optional)
+
+Laya is the local, offline decision engine. Use it when you do not want to send page elements to a hosted service. Set `REVERIE_DECISION_ENGINE=laya` (or pass `--engine laya` to `reverie start`) and run one of:
+
+- a laya.cpp server. Reverie talks to it over HTTP at `http://127.0.0.1:8080` by default; change that with `LAYA_BASE_URL`. You build and run laya.cpp yourself; see [Optional services](#optional-services) for a helper script.
+- MLX on Apple Silicon (see below), with `LAYA_BACKEND=mlx`.
+
+Laya needs no key.
 
 ## Install
 
@@ -74,17 +79,17 @@ cd reverie
 pip install -e .
 ```
 
-Both routes install two commands that do the same thing: `reverie` and `laya-agent`. This documentation uses `reverie`.
+Both routes install two commands that do the same thing: `reverie` and `laya-agent`, an older alias. This documentation uses `reverie`.
 
 ### Optional: MLX on Apple Silicon
 
-The `mlx` extra adds `laya-mlx`, which runs the Laya decision model in-process on Apple Silicon instead of through a laya.cpp server.
+The `mlx` extra adds `laya-mlx`, which runs the local Laya decision engine in-process on Apple Silicon instead of through a laya.cpp server.
 
 ```bash
 uv sync --extra mlx
 ```
 
-Select it with `LAYA_BACKEND=mlx`. The default, `auto`, uses MLX only on an Apple Silicon Mac where `laya_mlx` is installed. Everywhere else it uses HTTP.
+Use it with `REVERIE_DECISION_ENGINE=laya` and `LAYA_BACKEND=mlx`. The default, `auto`, uses MLX only on an Apple Silicon Mac where `laya_mlx` is installed. Everywhere else it uses HTTP.
 
 ## Configure
 
@@ -96,15 +101,21 @@ Copy the example file from the Reverie clone into your project:
 cp /path/to/reverie/.env.example .env
 ```
 
-Then edit `.env`. A minimal setup for OpenRouter is:
+Then edit `.env`. A minimal setup is one OpenRouter key:
 
 ```ini
 TEXT_MODEL_PROVIDER=openrouter
 OPENROUTER_API_KEY=your-openrouter-key
-LAYA_BASE_URL=http://127.0.0.1:8080
 ```
 
-The pilot and the text model call an OpenAI-compatible endpoint. `TEXT_MODEL_PROVIDER` picks the base URL, and `OPENROUTER_API_KEY` supplies the key. Without a provider or `TEXT_MODEL_BASE_URL`, the endpoint defaults to `https://api.deepseek.com/v1` and the key comes from `TEXT_MODEL_API_KEY`. Comments must be on their own line: everything after `=` is the value.
+Jev (the decision engine), the pilot, and the text model all use it. The pilot and the text model call an OpenAI-compatible endpoint. `TEXT_MODEL_PROVIDER` picks the base URL, and `OPENROUTER_API_KEY` supplies the key.
+
+To decide locally instead, add:
+
+```ini
+REVERIE_DECISION_ENGINE=laya
+LAYA_BASE_URL=http://127.0.0.1:8080
+``` Without a provider or `TEXT_MODEL_BASE_URL`, the endpoint defaults to `https://api.deepseek.com/v1` and the key comes from `TEXT_MODEL_API_KEY`. Comments must be on their own line: everything after `=` is the value.
 
 :::tip
 Keep API keys out of your repositories. Put them in `~/.config/reverie/.env` and restrict the file, so every project shares them:
@@ -118,11 +129,11 @@ chmod 600 ~/.config/reverie/.env
 The project's own `.env` then holds only settings, and wins over the user file when both set a variable.
 :::
 
-See [Models and providers](/reverie/reference/models/) for other providers, a separate pilot endpoint and local models, and the [configuration reference](/reverie/reference/configuration/) for every variable.
+See [Models and providers](/reverie/reference/models/) for other providers, a separate pilot endpoint and the decision engines, and the [configuration reference](/reverie/reference/configuration/) for every variable.
 
 ## Optional services
 
-`scripts/agent-services.sh` in the clone starts, stops, and checks the local services: laya.cpp and a local text-to-speech server.
+`scripts/agent-services.sh` in the clone starts, stops, and checks the optional local services: laya.cpp (only for local Laya) and a local text-to-speech server.
 
 ```bash
 scripts/agent-services.sh start
