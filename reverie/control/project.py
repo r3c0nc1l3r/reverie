@@ -8,7 +8,7 @@ finds `.git`); with none, it is the working directory. Layout:
   .reverie/specs/          stored test specs (created by `reverie init`)
   .reverie/runs/           one folder per session run: trail.jsonl, run.json, frames/
   .reverie/cache/          disposable caches (speech audio)
-  .reverie/playbook.json   lessons the pilot keeps per host (unless LAYA_AGENT_PLAYBOOK is set)
+  .reverie/playbook.json   lessons the pilot keeps per host (unless REVERIE_PLAYBOOK is set)
 
 Settings and API keys come from the environment, then from the .env files in `env_files()`.
 """
@@ -18,6 +18,8 @@ import os
 import re
 import shutil
 from pathlib import Path
+
+from ..settings import setting
 
 NAME = ".reverie"
 LEGACY = Path("artifacts") / "agent-sessions"
@@ -134,7 +136,7 @@ def env_files(start=None):
 
 
 def playbook_path():
-    configured = os.environ.get("LAYA_AGENT_PLAYBOOK")
+    configured = setting("REVERIE_PLAYBOOK")
     return Path(configured) if configured else reverie_dir() / "playbook.json"
 
 

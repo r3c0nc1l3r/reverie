@@ -23,6 +23,7 @@ from pathlib import Path
 import httpx
 
 from .. import __version__
+from ..settings import setting
 from . import project
 from .server import daemon_name, state_file
 
@@ -165,7 +166,7 @@ def start(args):
     log = state_file(args.session).with_suffix(".log")
     env = {**os.environ, "BU_NAME": daemon_name(args.session)}
     if getattr(args, "bluetooth", False):
-        env["LAYA_AGENT_BLUETOOTH_AUDIO"] = "1"
+        env["REVERIE_BLUETOOTH_AUDIO"] = "1"
     with open(log, "ab") as sink:
         process = subprocess.Popen(command, stdout=sink, stderr=sink, stdin=subprocess.DEVNULL,
                                    start_new_session=True, env=env)
@@ -310,7 +311,9 @@ def show(payload, as_json):
               f"conf={proposal['confidence']:.2f}  layer={proposal.get('layer', proposal['engine'])} "
               f"{proposal['latency_ms']}ms")
         if proposal.get("escalation"):
-            print(f"  escalated: {proposal['escalation']} (Laya {proposal.get('laya_confidence')})")
+            engine = (proposal.get("decision_engine") or "decision engine").title()
+            confidence = proposal.get("decision_confidence", proposal.get("laya_confidence"))
+            print(f"  escalated: {proposal['escalation']} ({engine} {confidence})")
         if proposal.get("reason"):
             print(f"  reason: {proposal['reason']}")
     if payload.get("rejected") is not None or payload.get("hints"):
@@ -350,7 +353,7 @@ def main(argv=None):
     parser = argparse.ArgumentParser(prog="reverie", description=__doc__,
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--version", action="version", version=f"reverie {__version__}")
-    parser.add_argument("--session", default=os.environ.get("LAYA_AGENT_SESSION", "default"))
+    parser.add_argument("--session", default=setting("REVERIE_SESSION", "default"))
     parser.add_argument("--json", action="store_true", help="Print raw JSON")
     sub = parser.add_subparsers(dest="command", required=True)
 
@@ -358,7 +361,8 @@ def main(argv=None):
     p.add_argument("--url", required=True)
     p.add_argument("--voice", default="auto", choices=["auto", "kitten", "kokoro", "fish", "espeak", "spd", "off"])
     p.add_argument("--goal", help="Goal for autonomous step/run")
-    p.add_argument("--engine", choices=["laya", "jev"])
+    p.add_argument("--engine", choices=["laya", "jev"],
+                   help="Decision engine: jev (hosted, default; needs OPENROUTER_API_KEY) or laya (local laya.cpp or MLX). Default: $REVERIE_DECISION_ENGINE, else jev")
     p.add_argument("--trail-dir")
     p.add_argument("--profile", help="Chromium profile dir (default: per-session, isolated)")
     p.add_argument("--download-dir", help="Save browser downloads here (default: $REVERIE_DOWNLOAD_DIR, "
@@ -373,7 +377,7 @@ def main(argv=None):
     p.add_argument("goal")
     p = sub.add_parser("do", help="Default driver: the stack carries out one intent, pausing when it needs you")
     p.add_argument("intent", help="What to accomplish on the page; quote any value to type, e.g. rate 2 '300'")
-    p.add_argument("--hint", action="append", default=[], help="Steering for Mercury (field names, which button)")
+    p.add_argument("--hint", action="append", default=[], help="Steering for the escalation model (field names, which button)")
     p.add_argument("--max", type=int, default=6, dest="max_steps")
     p.add_argument("--until-text")
     p.add_argument("--until-url")
@@ -408,15 +412,18 @@ def main(argv=None):
     p = sub.add_parser("note", help="Give the pilot fixture facts (record ids, emails, URLs); no secrets")
     p.add_argument("text")
     p = sub.add_parser("suggest", help="Fast model proposes ONE step (nothing runs until accept)")
-    p.add_argument("--engine", default="stack", choices=["stack", "mercury", "laya", "jev"],
-                   help="stack: Laya proposes, Mercury overrules when Laya is unsure (default)")
+    p.add_argument("--engine", default="stack", choices=["stack", "escalation", "mercury", "laya", "jev"],
+                   help="stack (default): the decision engine proposes; the escalation model overrules when it is "
+                   "unsure. escalation (old name: mercury): the escalation model alone. laya or jev: that decision "
+                   "engine alone, for this command")
     p.add_argument("--hint", help="Steer the model, e.g. 'use the search box, not the menu'")
     p.add_argument("--goal")
     sub.add_parser("accept", help="Execute the pending suggestion")
     p = sub.add_parser("reject", help="Drop the pending suggestion, optionally adding a steering hint")
     p.add_argument("--hint")
     p = sub.add_parser("auto", help="Fast loop; pauses on low confidence, DONE/BLOCKED/ADMIN, or an until-condition")
-    p.add_argument("--engine", default="stack", choices=["stack", "mercury", "laya", "jev"])
+    p.add_argument("--engine", default="stack", choices=["stack", "escalation", "mercury", "laya", "jev"],
+                   help="as for suggest")
     p.add_argument("--max", type=int, default=8, dest="max_steps")
     p.add_argument("--min-confidence", type=float, default=0.55)
     p.add_argument("--until-text")
@@ -511,7 +518,7 @@ def main(argv=None):
     p = sub.add_parser("screenshot")
     p.add_argument("path", nargs="?")
     for verb in ("step", "run"):
-        p = sub.add_parser(verb, help="Autonomous Laya/Jev " + ("step" if verb == "step" else "run"))
+        p = sub.add_parser(verb, help="Autonomous decision-engine " + ("step" if verb == "step" else "run"))
         p.add_argument("--goal")
         p.add_argument("--engine", choices=["laya", "jev"])
         p.add_argument("--confirm", action="store_true", help="Ask in the window before each action")

@@ -19,7 +19,7 @@ Messages that begin with `refused:` mean a guard stopped an action on purpose. R
 
 ### `reverie: no session named 'demo'. Run reverie start --url ...` (exit 4)
 
-No session with that name is running. Session commands use `--session NAME`, which defaults to `default` (or the `LAYA_AGENT_SESSION` environment variable). Check that you pass the same name to `start` and to every later command, then start the session:
+No session with that name is running. Session commands use `--session NAME`, which defaults to `default` (or the `REVERIE_SESSION` environment variable). Check that you pass the same name to `start` and to every later command, then start the session:
 
 ```bash
 reverie --session demo start --url https://example.com
@@ -39,13 +39,13 @@ The session process is not responding on its local port. Stop it and start a new
 
 Reverie prints the end of the session log after this line. Look there for the cause. Common ones follow.
 
-**`No Chromium-family browser found. Set LAYA_AGENT_BROWSER.`** Install Chromium, Chrome, or Brave so one of `chromium`, `google-chrome-stable`, `google-chrome`, `brave`, or `chromium-browser` is on your `PATH`. Or set the browser yourself:
+**`No Chromium-family browser found. Set REVERIE_BROWSER.`** Install Chromium, Chrome, or Brave so one of `chromium`, `google-chrome-stable`, `google-chrome`, `brave`, or `chromium-browser` is on your `PATH`. Or set the browser yourself:
 
 ```bash
-export LAYA_AGENT_BROWSER=/path/to/chrome
+export REVERIE_BROWSER=/path/to/chrome
 ```
 
-**`LAYA_AGENT_BROWSER=... was not found`**. The variable is set but points at nothing. Fix the path or unset the variable.
+**`REVERIE_BROWSER=... was not found`**. The variable is set but points at nothing. Fix the path or unset the variable.
 
 **`Chromium did not open its debugging port within 20 seconds`**. The browser started but did not become ready. Try again, and check that no policy or sandbox blocks it.
 
@@ -53,7 +53,7 @@ Reverie also gives up with `session did not become ready within 60 seconds` if s
 
 ### The dashboard
 
-`reverie ui` uses port 7788 and moves to any free port when that one is busy, so a busy port is not an error. Use the address that `reverie ui` prints. To prefer another port, set `LAYA_AGENT_UI_PORT`.
+`reverie ui` uses port 7788 and moves to any free port when that one is busy, so a busy port is not an error. Use the address that `reverie ui` prints. To prefer another port, set `REVERIE_UI_PORT`.
 
 If you see `reverie: the dashboard did not start; see ...`, open the log file named in the message.
 
@@ -63,7 +63,7 @@ If the dashboard shows no runs, check that you run it from the project that hold
 
 ### `Unable to reach local Laya service at ... Start laya.cpp or change LAYA_BASE_URL.`
 
-Commands that let the stack decide (`do`, `suggest`, `auto`, and the pilot) use a laya.cpp server, unless the session engine is Jev. In the default `stack` mode, Reverie hands the decision to the text model when Laya fails. You then see `escalated: Laya unavailable: ...` in the proposal, or a pilot step that ends blocked with `Laya escalated (...) and Mercury is disabled` when `LAYA_AGENT_MERCURY=off`. With `suggest --engine laya`, the error is `laya could not decide: ...`. Start laya.cpp, for example with `scripts/agent-services.sh start`, and make sure `LAYA_BASE_URL` matches its address (default `http://127.0.0.1:8080`). Reverie checks the server's `/health` endpoint first.
+This appears only when you use the local Laya engine (`REVERIE_DECISION_ENGINE=laya`, `reverie start --engine laya`, or `--engine laya` on one command). The default Jev engine needs no laya.cpp server. In the default `stack` mode, Reverie hands the decision to the escalation model (the text model) when Laya fails. You then see `escalated: Laya unavailable: ...` in the proposal, or a pilot step that ends blocked with `Laya escalated (...) and the escalation model is off` when `REVERIE_ESCALATION=off`. With `suggest --engine laya`, the error is `laya could not decide: ...`. Start laya.cpp, for example with `scripts/agent-services.sh start`, and make sure `LAYA_BASE_URL` matches its address (default `http://127.0.0.1:8080`). Reverie checks the server's `/health` endpoint first.
 
 Related messages:
 
@@ -75,7 +75,7 @@ Related messages:
 | `LAYA_BACKEND must be one of: auto, http, mlx.` | Fix the variable. |
 | `LAYA_BACKEND=mlx requires the optional MLX dependencies on Apple Silicon.` | Run `uv sync --extra mlx`, or set `LAYA_BACKEND=http`. |
 
-Direct control (`observe`, `act`, `check`) does not use Laya.
+Direct control (`observe`, `act`, `check`) does not use a decision engine.
 
 ### `The text model needs TEXT_MODEL_API_KEY`
 
@@ -83,22 +83,28 @@ The pilot, recaps, and the text helpers call an OpenAI-compatible model at `TEXT
 
 - Default or any other endpoint: set `TEXT_MODEL_API_KEY`.
 - OpenRouter: set `TEXT_MODEL_PROVIDER=openrouter` and `OPENROUTER_API_KEY`.
-- OpenCode Go: set `TEXT_MODEL_PROVIDER=opencode-go` (or `LAYA_AGENT_PILOT_PROVIDER` for the pilot only) and `OPENCODE_GO_API_KEY`, or sign in with OpenCode so its `auth.json` holds the key.
-- A separate pilot endpoint: set `LAYA_AGENT_PILOT_API_KEY`.
+- OpenCode Go: set `TEXT_MODEL_PROVIDER=opencode-go` (or `REVERIE_PILOT_PROVIDER` for the pilot only) and `OPENCODE_GO_API_KEY`, or sign in with OpenCode so its `auth.json` holds the key.
+- A separate pilot endpoint: set `REVERIE_PILOT_API_KEY`.
 
 A key is not needed when the base URL is `localhost` or `127.0.0.1`. The daemon reads `.env` files when it starts, so check that the key is in a file Reverie reads and is not empty. See [How `.env` is loaded](/reverie/reference/configuration/#how-env-is-loaded) and [Models and providers](/reverie/reference/models/).
 
 `Unknown model provider ...` means a provider variable is not `openrouter`, `opencode-go` or `deepseek`.
 
-In a run, this error shows up as a pause: `pilot error: The text model needs TEXT_MODEL_API_KEY (or LAYA_AGENT_PILOT_API_KEY, or an opencode-go key)...`. Fix the setting and run `pilot` again; it resumes from the first open step.
+In a run, this error shows up as a pause: `pilot error: The text model needs TEXT_MODEL_API_KEY (or REVERIE_PILOT_API_KEY, or an opencode-go key)...`. Fix the setting and run `pilot` again; it resumes from the first open step.
 
-Other errors in that group, such as `Model provider returned HTTP 429` or `The text model returned no choices`, come from the provider. The pilot pauses with `pilot error: ...` instead of crashing. Wait, or change `LAYA_AGENT_PILOT_MODEL` or `TEXT_MODEL`.
+Other errors in that group, such as `Model provider returned HTTP 429` or `The text model returned no choices`, come from the provider. The pilot pauses with `pilot error: ...` instead of crashing. Wait, or change `REVERIE_PILOT_MODEL` or `TEXT_MODEL`.
 
 Provider errors include the provider's own message, shortened, for example `Model provider returned HTTP 402: ...; no action executed.` Read that message first. A credit or quota problem shows up there.
 
-### `Jev needs OPENROUTER_API_KEY, or TEXT_MODEL_API_KEY with TEXT_MODEL_BASE_URL set to OpenRouter.`
+### `Jev, the default decision engine, needs an OpenRouter key.`
 
-The Jev engine (`reverie start --engine jev`, `LAYA_AGENT_ENGINE=jev`, or `--engine jev` on `suggest`, `auto` and `step`) calls OpenRouter's Decisions API. Set `OPENROUTER_API_KEY` in a file Reverie reads, and restart the session so the daemon picks it up. `TEXT_MODEL_PROVIDER=openrouter` alone does not supply the key. See [Decision engines](/reverie/reference/models/#decision-engines).
+The full message reads: `Jev, the default decision engine, needs an OpenRouter key. Set OPENROUTER_API_KEY (or TEXT_MODEL_API_KEY with TEXT_MODEL_BASE_URL on OpenRouter), or use the local Laya engine: REVERIE_DECISION_ENGINE=laya or reverie start --engine laya.` Jev is the default engine and calls OpenRouter's Decisions API, so a session without a key refuses to start. Reverie does not switch to Laya on its own. You do not need laya.cpp for the default setup.
+
+Fix it in one of two ways:
+
+- Set `OPENROUTER_API_KEY` in a file Reverie reads, and restart the session so the daemon picks it up.
+- Use local Laya, which needs a laya.cpp server (or MLX) but no key: `reverie start --engine laya` or `REVERIE_DECISION_ENGINE=laya`.
+`TEXT_MODEL_PROVIDER=openrouter` alone does not supply the key. See [Decision engines](/reverie/reference/models/#decision-engines).
 
 Other Jev messages:
 
@@ -107,11 +113,11 @@ Other Jev messages:
 | `The jev decision engine is unavailable: ...` | The engine could not start, usually for the missing key above. Drive the session with `observe` and `act` instead. |
 | `jev could not decide: ...` | The call failed or the answer was unusable. When the provider sent a message, it follows the HTTP status, for example an out-of-credit notice. |
 | `Jev would type '...', which the goal does not state. Nothing executed; state the value in quotes.` | The stated-value guard. Quote the value in the intent, hint or step. |
-| `LAYA_AGENT_ENGINE must be laya or jev` | Fix the variable. |
+| `REVERIE_DECISION_ENGINE must be laya or jev` | Fix the variable. The older `LAYA_AGENT_ENGINE` is read too. |
 
-### `Mercury is disabled (LAYA_AGENT_MERCURY=off)`
+### `The escalation model is off (REVERIE_ESCALATION=off)`
 
-Mercury is the text model that takes over when Laya is unsure. This message appears when you ask for `--engine mercury` while it is turned off. Set `LAYA_AGENT_MERCURY=on` to allow it.
+The escalation model is the text model (Mercury by default) that takes over when the decision engine is unsure. This message appears when you ask for `--engine escalation` (or the old `--engine mercury`) while it is turned off. Set `REVERIE_ESCALATION=on`, or remove the setting, to allow it.
 
 ## The pilot stops
 
@@ -120,7 +126,7 @@ The pilot stops, rather than repeating itself, in these cases. Run `reverie --se
 | Pause reason | What happened | What to do |
 |---|---|---|
 | `admin` or `ask` | A checkpoint or a question needs you. | Run `checkpoints`, handle it, `resolve <id> done`, then `pilot` again. |
-| `stuck` | The pilot made no progress on one step after `LAYA_AGENT_PILOT_STUCK` operations (default 12). A checkpoint is raised. | Look at the browser and the events. Fix the cause or add a `note` or hint, mark the step yourself, then `pilot`. |
+| `stuck` | The pilot made no progress on one step after `REVERIE_PILOT_STUCK` operations (default 12). A checkpoint is raised. | Look at the browser and the events. Fix the cause or add a `note` or hint, mark the step yourself, then `pilot`. |
 | `step N blocked` | The pilot marked step N blocked. | Read its note in `progress`. |
 | `pilot error: ...` | A model call failed or returned something invalid. | See the model errors above. |
 | `stopped by the orchestrator` | You ran `pilot stop`. | Run `pilot` to resume. |
@@ -128,11 +134,11 @@ The pilot stops, rather than repeating itself, in these cases. Run `reverie --se
 
 ### Stalls turn into a checkpoint
 
-If a running pilot logs no activity for `LAYA_AGENT_STALL_SECONDS` seconds (default 240), a watchdog records the stall, asks the pilot to stop at its next step, and raises a checkpoint: `The pilot has shown no activity for N s (hung model or browser call)`. Check `progress`, handle the checkpoint, and run `pilot` to resume.
+If a running pilot logs no activity for `REVERIE_STALL_SECONDS` seconds (default 240), a watchdog records the stall, asks the pilot to stop at its next step, and raises a checkpoint: `The pilot has shown no activity for N s (hung model or browser call)`. Check `progress`, handle the checkpoint, and run `pilot` to resume.
 
 ### Loops
 
-The stack pauses with a reason like `loop: the same action ran three times` or `stalled: 3 actions changed nothing`. The suggestion guard also refuses `Laya is looping on the same action` and `Laya is repeating a two-step cycle`. Take over with `observe` and `act`, or add a hint.
+The stack pauses with a reason like `loop: the same action ran three times` or `stalled: 3 actions changed nothing`. The suggestion guard also refuses messages such as `Laya is looping on the same action` and `Laya is repeating a two-step cycle` (the engine's name, Jev or Laya, comes first). Take over with `observe` and `act`, or add a hint.
 
 ## A click was refused (exit code 2)
 
@@ -148,7 +154,7 @@ Other `refused:` messages and their fixes:
 
 | Message | Fix |
 |---|---|
-| `Mercury would type '...', which the goal does not state.` | Put the value in the intent, or in a spec `note`. Reverie types only stated values. |
+| `The escalation model would type '...', which the goal does not state.` | Put the value in the intent, or in a spec `note`. Reverie types only stated values. |
 | `Pilot would type '...', which the plan and notes do not state` | Add the value to the spec's Fixtures or to a `note`. |
 | `This intent is read-only; the stack wanted to change '...'` | The pilot marked the intent read-only. Use `act` yourself if you do want the change. |
 | `The stack chose '...', which the pilot said to avoid.` | Change the intent or act directly. |
@@ -167,13 +173,13 @@ Reverie also masks tokens and codes in trails and model context, and the session
 
 ## Dialogs
 
-Native `alert`, `confirm`, and `prompt` boxes would block the browser, so Reverie answers them itself. The default is to accept. Set `LAYA_AGENT_DIALOGS=dismiss` to dismiss instead. The pilot can switch the answer during a run, and can set the text an accepted `prompt` returns (it must be a value the plan or notes state). Without that, a prompt returns its default value. The dialog text and the answer given are recorded in the trail. To answer a dialog that is already blocking the page, run `reverie --session NAME dialog accept` or `dialog dismiss`.
+Native `alert`, `confirm`, and `prompt` boxes would block the browser, so Reverie answers them itself. The default is to accept. Set `REVERIE_DIALOGS=dismiss` to dismiss instead. The pilot can switch the answer during a run, and can set the text an accepted `prompt` returns (it must be a value the plan or notes state). Without that, a prompt returns its default value. The dialog text and the answer given are recorded in the trail. To answer a dialog that is already blocking the page, run `reverie --session NAME dialog accept` or `dialog dismiss`.
 
 ## FAQ
 
 ### Is `laya-agent` the same as `reverie`?
 
-Yes. Both console commands run the same program. Use whichever you like.
+Yes. Both console commands run the same program. `reverie` is the name to use; `laya-agent` is an older alias.
 
 ### Where are runs stored?
 

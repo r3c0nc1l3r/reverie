@@ -1,30 +1,33 @@
 ---
 title: Models and providers
-description: How Reverie picks the pilot model, the text model and the Laya decision backend.
+description: How Reverie picks the decision engine (Jev or Laya), the escalation model, the pilot model and the providers.
 ---
 
-Reverie uses three kinds of model. Each has its own settings. See [Configuration](/reverie/reference/configuration/) for every variable.
+Reverie uses three kinds of model. Each has its own settings. One OpenRouter key covers the default setup. See [Configuration](/reverie/reference/configuration/) for every variable.
 
 | Role | What it does | Set with |
 | --- | --- | --- |
-| Pilot | Runs a whole test plan: turns each step into intents, checks results, moves between tabs. | `LAYA_AGENT_PILOT_MODEL` |
-| Text model | Fills in field values, plans each goal, and powers Mercury, which overrules Laya when it is unsure. | `TEXT_MODEL` and friends |
-| Fast layer: Laya or Jev | Makes the fast typed decision for each click or keystroke. | `LAYA_AGENT_ENGINE`, `LAYA_BACKEND` |
+| Pilot | Runs a whole test plan: turns each step into intents, checks results, moves between tabs. | `REVERIE_PILOT_MODEL` |
+| Text model | Fills in field values, plans each goal, and is the escalation model (Mercury by default), which overrules the decision engine when it is unsure. | `TEXT_MODEL` and friends |
+| Decision engine: Jev or Laya | Makes the fast typed decision for each click or keystroke. Jev is hosted and the default; Laya is local. | `REVERIE_DECISION_ENGINE`, `LAYA_BACKEND` |
 
 ## Defaults in the code
 
 | Setting | Default |
 | --- | --- |
-| `LAYA_AGENT_PILOT_MODEL` | `z-ai/glm-5.3-flash` |
+| `REVERIE_PILOT_MODEL` | `z-ai/glm-5.3-flash` |
 | `TEXT_MODEL` | `deepseek-chat` |
 | `TEXT_MODEL_BASE_URL` | `https://api.deepseek.com/v1` |
 | `TEXT_MODEL_EFFORT` | `low` |
+| `REVERIE_DECISION_ENGINE` | `jev` |
+| `REVERIE_ESCALATION` | `on` |
+| `REVERIE_DECISION_MIN_CONFIDENCE` | `0.6` |
 | `LAYA_BACKEND` | `auto` |
 | `LAYA_BASE_URL` | `http://127.0.0.1:8080` |
 | `LOCAL_DECISION_MODEL` | `aac6fef/laya-typed-decisions-mlx` |
 | `REMOTE_DECISION_MODEL` | `typesafe/jev-1.13` |
 
-`.env.example` sets `TEXT_MODEL_PROVIDER=openrouter` and sets both the pilot and the text model to `z-ai/glm-5.3-flash:nitro`.
+`.env.example` sets `TEXT_MODEL_PROVIDER=openrouter` and sets both the pilot and the text model to `z-ai/glm-5.3-flash:nitro`. It also sets `REVERIE_ESCALATION=off`; the code default is on.
 
 ## Pilot and text model
 
@@ -32,16 +35,16 @@ Both call an OpenAI-compatible chat API at the base URL plus `/chat/completions`
 
 | Setting | Text model | Pilot |
 | --- | --- | --- |
-| Provider preset | `TEXT_MODEL_PROVIDER` | `LAYA_AGENT_PILOT_PROVIDER` |
-| Base URL | `TEXT_MODEL_BASE_URL` | `LAYA_AGENT_PILOT_BASE_URL` |
-| API key | `TEXT_MODEL_API_KEY` | `LAYA_AGENT_PILOT_API_KEY` |
-| Model id | `TEXT_MODEL` | `LAYA_AGENT_PILOT_MODEL` |
+| Provider preset | `TEXT_MODEL_PROVIDER` | `REVERIE_PILOT_PROVIDER` |
+| Base URL | `TEXT_MODEL_BASE_URL` | `REVERIE_PILOT_BASE_URL` |
+| API key | `TEXT_MODEL_API_KEY` | `REVERIE_PILOT_API_KEY` |
+| Model id | `TEXT_MODEL` | `REVERIE_PILOT_MODEL` |
 
 The pilot falls back to the text model's provider, base URL and key for any of these it does not set. The model id does not fall back to `TEXT_MODEL` for the pilot: it defaults to `z-ai/glm-5.3-flash`.
 
 ### Providers
 
-A provider preset picks the base URL. Set `TEXT_MODEL_PROVIDER` or `LAYA_AGENT_PILOT_PROVIDER` to one of these names. Any other value is an error.
+A provider preset picks the base URL. Set `TEXT_MODEL_PROVIDER` or `REVERIE_PILOT_PROVIDER` to one of these names. Any other value is an error.
 
 | Provider | Base URL | Key, when no key variable is set |
 | --- | --- | --- |
@@ -57,9 +60,9 @@ For the pilot, each setting is the first one that is set in this order:
 
 | Setting | 1st | 2nd | 3rd |
 | --- | --- | --- | --- |
-| Provider | `LAYA_AGENT_PILOT_PROVIDER` | `TEXT_MODEL_PROVIDER` | the host of the base URL |
-| Base URL | `LAYA_AGENT_PILOT_BASE_URL` | `TEXT_MODEL_BASE_URL` | the provider's preset, else DeepSeek |
-| API key | `LAYA_AGENT_PILOT_API_KEY` | `TEXT_MODEL_API_KEY` | the provider's own key source |
+| Provider | `REVERIE_PILOT_PROVIDER` | `TEXT_MODEL_PROVIDER` | the host of the base URL |
+| Base URL | `REVERIE_PILOT_BASE_URL` | `TEXT_MODEL_BASE_URL` | the provider's preset, else DeepSeek |
+| API key | `REVERIE_PILOT_API_KEY` | `TEXT_MODEL_API_KEY` | the provider's own key source |
 
 The text model uses the same order without the first column. An explicit base URL or key always beats a preset.
 
@@ -87,11 +90,44 @@ On a local endpoint, `TEXT_MODEL_REASONING=none` sends `reasoning_effort: none`;
 
 ### Vision for the pilot
 
-The pilot receives a screenshot with a numbered tag on every on-screen control. Set `LAYA_AGENT_PILOT_VISION=0` to turn that off. The pilot model must accept images to use it. A second call reviews each step's frames for broken UI; set `LAYA_AGENT_UI_REVIEW=0` to turn it off.
+The pilot receives a screenshot with a numbered tag on every on-screen control. Set `REVERIE_PILOT_VISION=0` to turn that off. The pilot model must accept images to use it. A second call reviews each step's frames for broken UI; set `REVERIE_UI_REVIEW=0` to turn it off.
 
-## Laya decision backend
+## Decision engines
 
-`LAYA_BACKEND` accepts three values. Anything else is an error.
+Layer 1, the decision engine, makes each click and keystroke under the pilot. Layer 2, the escalation model, steps in when the decision engine is unsure. Two engines can be layer 1.
+
+| Engine | Where it runs | Needs | How to choose it |
+| --- | --- | --- | --- |
+| Jev (default) | Hosted on OpenRouter's Decisions API (`POST https://openrouter.ai/api/alpha/decisions`), model `typesafe/jev-1.13`; `REMOTE_DECISION_MODEL` overrides it | `OPENROUTER_API_KEY`; no local server | Nothing, or `reverie start --engine jev` |
+| Laya | Locally, through laya.cpp (`LAYA_BASE_URL`) or MLX (`LAYA_BACKEND=mlx`; `LOCAL_DECISION_MODEL` is the MLX model) | A local model server or an Apple Silicon Mac; no key | `reverie start --engine laya`, or `REVERIE_DECISION_ENGINE=laya` |
+
+Jev costs about $0.0001 to $0.0004 and takes about 250 ms per decision. Laya is free; speed depends on your hardware.
+
+### How to choose
+
+- Stay on Jev when you already have an OpenRouter key and do not want to run a model server. You pay a small fee per decision and need a network connection.
+- Pick Laya when you want to decide locally and offline, with no per-decision cost, and you have a laya.cpp server or an Apple Silicon Mac.
+
+### Session engine and one-off engines
+
+The session's engine drives `do`, `auto` and the pilot. Set it with `reverie start --engine laya` or `REVERIE_DECISION_ENGINE=laya`. The flag wins over the variable. Any other value of `REVERIE_DECISION_ENGINE` is an error. The older name `LAYA_AGENT_ENGINE` still works.
+
+`suggest`, `auto` and `step` also take `--engine`. With `--engine jev` or `--engine laya` they use that engine alone for that one command, and the session's engine stays as it was. `suggest` and `auto` also accept `stack` (the default: the decision engine proposes, the escalation model overrules) and `escalation` (the escalation model alone; the old value `mercury` still works). `step` and `run` accept `laya` and `jev`.
+
+### When the key is missing
+
+Jev is the default, so a session needs a key unless you choose Laya. Without `OPENROUTER_API_KEY`, the session refuses to start. It says to set `OPENROUTER_API_KEY` (or `TEXT_MODEL_API_KEY` with `TEXT_MODEL_BASE_URL` on OpenRouter), or to use the local Laya engine with `REVERIE_DECISION_ENGINE=laya` or `reverie start --engine laya`. Reverie does not fall back to Laya on its own.
+
+`TEXT_MODEL_PROVIDER=openrouter` alone does not supply the key.
+
+### Guards
+
+- **Stated values.** Jev picks the element. For a text field, the text model supplies the value before anything runs, so the stated-value guard applies to every engine: only a value the goal or hints state is typed. With the escalation model off, Jev refuses an unstated value and nothing executes.
+- **Trail.** Each suggestion in the trail carries `decision_model`, `decision_ms` and `decision_cost`, so you can see what each decision cost. See [Runs and dashboard](/reverie/guides/runs-and-dashboard/).
+
+### Laya backends
+
+`LAYA_BACKEND` accepts three values. Anything else is an error. It applies only when the engine is Laya.
 
 | Value | Behaviour |
 | --- | --- |
@@ -99,61 +135,27 @@ The pilot receives a screenshot with a numbered tag on every on-screen control. 
 | `mlx` | Runs the model in-process on Apple Silicon. Needs the `laya-mlx` extra: `uv sync --extra mlx`. |
 | `auto` | The default. Uses `mlx` on an Apple Silicon Mac when `laya_mlx` is installed, otherwise `http`. |
 
-For `http`, `LAYA_HTTP_TIMEOUT` sets the timeout in seconds (default 30) and `LAYA_TLS_CA` points at a CA file for TLS. The `scripts/agent-services.sh` script can start laya.cpp locally; see [Configuration](/reverie/reference/configuration/#local-services-script).
+For `http`, `LAYA_HTTP_TIMEOUT` sets the timeout in seconds (default 30) and `LAYA_TLS_CA` points at a CA file for TLS. The `scripts/agent-services.sh` script can start laya.cpp locally; see [Configuration](/reverie/reference/configuration/#local-services-script). For `mlx`, `LOCAL_DECISION_MODEL` chooses the model to load.
 
-For `mlx`, `LOCAL_DECISION_MODEL` chooses the model to load.
+## Escalation model
 
-## Decision engines
+The escalation model (layer 2) is the text model, called Mercury by default. It is not a separate model id: it uses `TEXT_MODEL` and the other `TEXT_MODEL_*` settings. With the default `stack` engine, the decision engine proposes each step, and the escalation model overrules when the engine is unsure: low confidence (below `REVERIE_DECISION_MIN_CONFIDENCE`, default `0.6`), a looping action, an unstated value, and so on. The same rules apply to Jev and to Laya.
 
-Under the pilot, a fast layer makes each click and keystroke. Two engines can be that layer. Mercury, the text model, steps in when the fast layer is unsure.
-
-| | Laya | Jev |
-| --- | --- | --- |
-| Where it runs | Locally, through laya.cpp or MLX | Hosted on OpenRouter's Decisions API (`POST https://openrouter.ai/api/alpha/decisions`) |
-| Model | `LOCAL_DECISION_MODEL` for MLX, or whatever the laya.cpp server loads | `typesafe/jev-1.13`; `REMOTE_DECISION_MODEL` overrides it |
-| Key | none | `OPENROUTER_API_KEY` |
-| Local model server | laya.cpp (or MLX) must be running | not needed |
-| Cost and speed | free; depends on your hardware | about 250 ms and about $0.0001 to $0.0004 per decision |
-| Choose it with | nothing (the default), or `--engine laya` | `reverie start --engine jev`, or `LAYA_AGENT_ENGINE=jev` |
-
-### How to choose
-
-- Pick Laya when you have a laya.cpp server or an Apple Silicon Mac and want no per-decision cost.
-- Pick Jev when you do not want to run a local model. You pay a small fee per decision and need a network connection.
-
-### Session engine and one-off engines
-
-The session's engine is the fast layer under the whole stack. It drives `do`, `auto` and the pilot. Set it with `reverie start --engine jev` or `LAYA_AGENT_ENGINE=jev`. The flag wins over the variable. Any other value of `LAYA_AGENT_ENGINE` is an error.
-
-`suggest`, `auto` and `step` also take `--engine`. With `--engine jev` they use Jev for that one command, without Mercury behind it, and the session's engine stays as it was. `suggest` and `auto` also accept `stack` (the default: the session's fast layer, with Mercury behind it), `mercury` and `laya`; `step` accepts `laya` and `jev`.
-
-### Guards
-
-- **Key.** Jev needs `OPENROUTER_API_KEY`. It also accepts `TEXT_MODEL_API_KEY` when `TEXT_MODEL_BASE_URL` points at OpenRouter. `TEXT_MODEL_PROVIDER=openrouter` alone does not supply the key.
-- **Stated values.** Jev picks the element. For a text field, the text model supplies the value before anything runs, so the stated-value guard applies exactly as it does for Laya: only a value the goal or hints state is typed. Without Mercury behind it, Jev refuses an unstated value and nothing executes.
-- **Trail.** Each suggestion in the trail carries `decision_model`, `decision_ms` and `decision_cost`, so you can see what each decision cost.
-
-### Mercury
-
-Mercury is the text model, not a separate model id. With the default `stack` engine, the fast layer proposes each step, and Mercury overrules when it is unsure. The same escalation rules apply to Laya and to Jev (low confidence, a looping action, an unstated value, and so on).
-
-Set `LAYA_AGENT_MERCURY=off` to disable Mercury. An unsure step then goes back to the pilot unexecuted. With Mercury off, a fresh hint does not block the fast layer, because the hint is already in its goal. A fast layer that reports `DONE` is reported as `DONE`.
+Set `REVERIE_ESCALATION=off` to turn it off. An unsure step then goes back to the pilot unexecuted. With it off, a fresh hint does not block the decision engine, because the hint is already in its goal. A decision engine that reports `DONE` is reported as `DONE`. The older name `LAYA_AGENT_MERCURY` still works.
 
 ## `.env` snippets
 
-### OpenRouter pilot and text model, local laya.cpp
+### OpenRouter for everything (the default)
 
 ```ini
 TEXT_MODEL_PROVIDER=openrouter
 OPENROUTER_API_KEY=your-key
 TEXT_MODEL=z-ai/glm-5.3-flash:nitro
-LAYA_AGENT_PILOT_MODEL=z-ai/glm-5.3-flash:nitro
+REVERIE_PILOT_MODEL=z-ai/glm-5.3-flash:nitro
 TEXT_MODEL_EFFORT=low
-LAYA_BACKEND=http
-LAYA_BASE_URL=http://127.0.0.1:8080
 ```
 
-The same key also serves the Jev engine.
+The same key also serves the Jev decision engine.
 
 ### OpenCode Go pilot
 
@@ -163,8 +165,8 @@ The pilot uses OpenCode Go. The text model keeps its own endpoint.
 TEXT_MODEL_PROVIDER=openrouter
 OPENROUTER_API_KEY=your-openrouter-key
 TEXT_MODEL=z-ai/glm-5.3-flash:nitro
-LAYA_AGENT_PILOT_PROVIDER=opencode-go
-LAYA_AGENT_PILOT_MODEL=glm-5.3-flash
+REVERIE_PILOT_PROVIDER=opencode-go
+REVERIE_PILOT_MODEL=glm-5.3-flash
 # OPENCODE_GO_API_KEY=your-key
 ```
 
@@ -175,9 +177,9 @@ Without `OPENCODE_GO_API_KEY`, Reverie reads the key from OpenCode's `auth.json`
 The pilot uses a gateway of its own. The text model stays on its defaults.
 
 ```ini
-LAYA_AGENT_PILOT_BASE_URL=https://gateway.example.com/v1
-LAYA_AGENT_PILOT_API_KEY=your-gateway-key
-LAYA_AGENT_PILOT_MODEL=your-pilot-model-id
+REVERIE_PILOT_BASE_URL=https://gateway.example.com/v1
+REVERIE_PILOT_API_KEY=your-gateway-key
+REVERIE_PILOT_MODEL=your-pilot-model-id
 TEXT_MODEL_API_KEY=your-text-model-key
 ```
 
@@ -187,21 +189,33 @@ TEXT_MODEL_API_KEY=your-text-model-key
 TEXT_MODEL_BASE_URL=https://api.example.com/v1
 TEXT_MODEL_API_KEY=your-key
 TEXT_MODEL=your-text-model-id
-LAYA_AGENT_PILOT_MODEL=your-pilot-model-id
+REVERIE_PILOT_MODEL=your-pilot-model-id
+# Jev still needs OPENROUTER_API_KEY; to avoid it, decide locally:
+REVERIE_DECISION_ENGINE=laya
 LAYA_BACKEND=http
+LAYA_BASE_URL=http://127.0.0.1:8080
 ```
 
 ### Local text model
 
 ```ini
+REVERIE_DECISION_ENGINE=laya
 TEXT_MODEL_BASE_URL=http://127.0.0.1:11434/v1
 TEXT_MODEL=your-local-model-id
-LAYA_AGENT_PILOT_MODEL=your-local-model-id
+REVERIE_PILOT_MODEL=your-local-model-id
 TEXT_MODEL_REASONING=none
-LAYA_AGENT_PILOT_VISION=0
+REVERIE_PILOT_VISION=0
 ```
 
 Turn vision off unless your local model accepts images.
+
+### Local Laya through laya.cpp
+
+```ini
+REVERIE_DECISION_ENGINE=laya
+LAYA_BACKEND=http
+LAYA_BASE_URL=http://127.0.0.1:8080
+```
 
 ### Laya on Apple Silicon (MLX)
 
@@ -210,20 +224,21 @@ uv sync --extra mlx
 ```
 
 ```ini
+REVERIE_DECISION_ENGINE=laya
 LAYA_BACKEND=mlx
 # LOCAL_DECISION_MODEL=aac6fef/laya-typed-decisions-mlx
 ```
 
-### Jev as the fast layer
+### Jev as the decision engine (the default)
 
 ```ini
 OPENROUTER_API_KEY=your-key
-LAYA_AGENT_ENGINE=jev
+# REVERIE_DECISION_ENGINE=jev
 # REMOTE_DECISION_MODEL=typesafe/jev-1.13
 ```
 
-### Without Mercury
+### Without the escalation model
 
 ```ini
-LAYA_AGENT_MERCURY=off
+REVERIE_ESCALATION=off
 ```

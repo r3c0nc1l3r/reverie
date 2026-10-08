@@ -267,13 +267,13 @@ def test_suggest_then_accept_runs_only_the_proposal(tmp_path, monkeypatch):
 
     s = session(tmp_path)
     s.goal, s.hints, s.pending, s.agent = "Sign in as 'validator'", [], None, None
-    monkeypatch.setattr(steer, "mercury_choose", lambda goal, page, history, hints, **kw: (
+    monkeypatch.setattr(steer, "escalation_choose", lambda goal, page, history, hints, **kw: (
         {"choice": "e1", "text": "validator", "reason": "username first", "confidence": 0.9}, {"model": "m"}))
     proposal = s.suggest("mercury", hint="use the username box")["proposal"]
     assert proposal["ref"] == "e1" and s.hints == ["use the username box"]
     s.browser.act.assert_not_called()
     s.accept()
-    assert s.browser.act.call_count == 1 and s.history[-1]["by"] == "mercury" and s.pending is None
+    assert s.browser.act.call_count == 1 and s.history[-1]["by"] == "escalation" and s.pending is None
     with pytest.raises(SessionError, match="No pending"):
         s.accept()
 
@@ -283,7 +283,7 @@ def test_auto_pauses_on_low_confidence(tmp_path, monkeypatch):
 
     s = session(tmp_path)
     s.goal, s.hints, s.pending, s.agent = "Sign in as 'validator' and submit", [], None, None
-    monkeypatch.setattr(steer, "mercury_choose", lambda *a, **kw: (
+    monkeypatch.setattr(steer, "escalation_choose", lambda *a, **kw: (
         {"choice": "e3", "text": None, "reason": "unsure", "confidence": 0.2}, {"model": "m"}))
     result = s.auto("mercury", max_steps=3)
     assert result["paused"] == "low_confidence" and result["proposal"]["ref"] == "e3"
@@ -306,12 +306,12 @@ def stack_session(tmp_path, monkeypatch, confidence, choice="e3"):
     from reverie.control import steer
 
     s = session(tmp_path)
-    s.goal, s.hints, s.pending, s.agent = "Submit order 8", [], None, None
+    s.goal, s.hints, s.pending, s.agent, s.engine = "Submit order 8", [], None, None, "laya"
     calls = []
     decision = {"choice": choice, "confidence": confidence, "probabilities": {choice: confidence, "e1": 0.1},
                 "operation": "CLICK", "target": "3"}
     monkeypatch.setattr(Session, "_fast_propose", lambda self, engine=None: decision)
-    monkeypatch.setattr(steer, "mercury_choose", lambda *a, **kw: calls.append(kw) or (
+    monkeypatch.setattr(steer, "escalation_choose", lambda *a, **kw: calls.append(kw) or (
         {"choice": "e1", "text": "order 8", "reason": "better", "confidence": 0.8}, {"model": "mercury"}))
     return s, calls
 
@@ -319,22 +319,22 @@ def stack_session(tmp_path, monkeypatch, confidence, choice="e3"):
 def test_stack_keeps_confident_laya_decisions_local(tmp_path, monkeypatch):
     s, calls = stack_session(tmp_path, monkeypatch, 0.93)
     proposal = s.suggest("stack")["proposal"]
-    assert proposal["layer"] == "laya" and proposal["ref"] == "e3" and calls == []
+    assert proposal["layer"] == "decision" and proposal["decision_engine"] == "laya" and proposal["ref"] == "e3" and calls == []
 
 
 def test_stack_escalates_unsure_laya_to_mercury_with_candidates(tmp_path, monkeypatch):
     s, calls = stack_session(tmp_path, monkeypatch, 0.3)
     proposal = s.suggest("stack")["proposal"]
-    assert proposal["layer"] == "mercury" and proposal["ref"] == "e1"
+    assert proposal["layer"] == "escalation" and proposal["ref"] == "e1"
     assert "confidence 0.30" in proposal["escalation"]
     assert calls[0]["candidates"][0]["id"] == "e3" and calls[0]["escalation"] == proposal["escalation"]
 
 
 def test_stack_sends_fresh_hints_to_mercury_once(tmp_path, monkeypatch):
     s, calls = stack_session(tmp_path, monkeypatch, 0.95)
-    assert s.suggest("stack", hint="use the search box")["proposal"]["layer"] == "mercury"
+    assert s.suggest("stack", hint="use the search box")["proposal"]["layer"] == "escalation"
     s.pending = None
-    assert s.suggest("stack")["proposal"]["layer"] == "laya" and len(calls) == 1
+    assert s.suggest("stack")["proposal"]["layer"] == "decision" and len(calls) == 1
 
 
 def test_model_checkpoints_never_carry_commands(tmp_path):
@@ -369,7 +369,7 @@ def test_stack_escalates_when_laya_would_undo_mercury(tmp_path, monkeypatch):
     monkeypatch.setattr(Session, "_fast_propose", lambda self, engine=None: {
         "choice": "e1", "text": "28", "confidence": 0.97, "probabilities": {"e1": 0.97}})
     proposal = s.suggest("stack")["proposal"]
-    assert proposal["layer"] == "mercury" and "undo" in proposal["escalation"]
+    assert proposal["layer"] == "escalation" and "undo" in proposal["escalation"]
 
 
 def test_hints_fold_into_laya_goal(tmp_path):
@@ -384,7 +384,7 @@ def test_stack_escalates_loops_hidden_behind_waits(tmp_path, monkeypatch):
     for kind, label in (("click", "Submit"), ("wait", "Wait"), ("click", "Submit"), ("wait", "Wait")):
         s.history.append({"kind": kind, "label": label, "by": "laya"})
     proposal = s.suggest("stack")["proposal"]
-    assert proposal["layer"] == "mercury" and "looping" in proposal["escalation"]
+    assert proposal["layer"] == "escalation" and "looping" in proposal["escalation"]
 
 
 def test_stack_escalates_confident_pick_that_ignores_goal_wording(tmp_path, monkeypatch):
@@ -392,11 +392,11 @@ def test_stack_escalates_confident_pick_that_ignores_goal_wording(tmp_path, monk
     s.goal = "Click Resend Order Email for order 8"
     s.page["actions"].insert(0, {"id": "e9", "kind": "click", "label": "Resend Order Email", "node": 9})
     proposal = s.suggest("stack")["proposal"]
-    assert proposal["layer"] == "mercury" and "goal wording" in proposal["escalation"]
+    assert proposal["layer"] == "escalation" and "goal wording" in proposal["escalation"]
 
 
 def test_marking_a_step_speaks_one_recap_not_every_click(tmp_path, monkeypatch):
-    monkeypatch.delenv("LAYA_AGENT_NARRATION", raising=False)
+    monkeypatch.delenv("REVERIE_NARRATION", raising=False)
     s = session(tmp_path)
     s.plan("Login", ["Sign in"])
     s.act("e1", text="validator")
@@ -500,7 +500,7 @@ def test_pilot_guards_avoid_and_allow_values(tmp_path, monkeypatch):
 def test_playbook_lessons_persist_by_host(tmp_path, monkeypatch):
     from reverie.control import pilot
 
-    monkeypatch.setenv("LAYA_AGENT_PLAYBOOK", str(tmp_path / "book.json"))
+    monkeypatch.setenv("REVERIE_PLAYBOOK", str(tmp_path / "book.json"))
     assert pilot.add_lesson("qa.example", "Never click the logo", "T-1")
     assert not pilot.add_lesson("qa.example", "never click the logo ")
     assert pilot.lessons_for({"qa.example", "other"}) == {"qa.example": ["Never click the logo"]}
@@ -551,7 +551,7 @@ def test_replay_slides_follow_steps_and_skip_repeated_frames(tmp_path):
     kinds = [(s["kind"], s.get("frame")) for s in deck["slides"]]
     assert kinds == [("title", None), ("step", None), ("target", "b1.jpg"), ("result", "a1.jpg"),
                      ("check", "c.jpg"), ("verdict", "c.jpg")]
-    assert deck["slides"][2]["caption"].startswith("Laya will click Go")
+    assert deck["slides"][2]["caption"].startswith("Decision engine · Laya will click Go")
     assert deck["slides"][-1]["said"] == "Step one is done."
 
 
@@ -634,10 +634,10 @@ def test_auto_reports_the_actions_it_ran(tmp_path, monkeypatch):
 
 
 def test_mercury_off_returns_doubtful_steps_to_the_pilot(tmp_path, monkeypatch):
-    monkeypatch.setenv("LAYA_AGENT_MERCURY", "off")
+    monkeypatch.setenv("REVERIE_ESCALATION", "off")
     s, calls = stack_session(tmp_path, monkeypatch, 0.2)
     proposal = s.suggest("stack")["proposal"]
-    assert proposal["ref"] == "BLOCKED" and "Mercury is disabled" in proposal["reason"] and not calls
+    assert proposal["ref"] == "BLOCKED" and "escalation model is off" in proposal["reason"] and not calls
 
 
 def test_project_root_is_the_nearest_ancestor_with_reverie(tmp_path, monkeypatch):
@@ -654,9 +654,9 @@ def test_project_root_is_the_nearest_ancestor_with_reverie(tmp_path, monkeypatch
     base = tmp_path / "app" / ".reverie"
     assert "runs/" in (base / ".gitignore").read_text() and "cache/" in (base / ".gitignore").read_text()
     assert (base / "README.md").exists()
-    monkeypatch.delenv("LAYA_AGENT_PLAYBOOK", raising=False)
+    monkeypatch.delenv("REVERIE_PLAYBOOK", raising=False)
     assert project.playbook_path() == base.resolve() / "playbook.json"
-    monkeypatch.setenv("LAYA_AGENT_PLAYBOOK", str(tmp_path / "book.json"))
+    monkeypatch.setenv("REVERIE_PLAYBOOK", str(tmp_path / "book.json"))
     assert project.playbook_path() == tmp_path / "book.json"
 
 
@@ -664,6 +664,7 @@ def test_new_runs_are_written_under_reverie_runs(tmp_path, monkeypatch):
     from reverie.control import session as session_module
 
     monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")  # Jev, the default engine, checks for a key at start
     monkeypatch.setattr(session_module, "HeadedBrowser", Mock())
     monkeypatch.setattr(session_module, "Narrator", Mock(return_value=Mock(voice="off")))
     monkeypatch.setattr(Session, "observe", lambda self, settle=False: None)
@@ -869,14 +870,14 @@ def test_an_empty_project_value_does_not_hide_the_user_key(tmp_path, monkeypatch
 def test_pilot_endpoint_falls_back_to_text_model_and_accepts_its_own(monkeypatch):
     from reverie import model
 
-    for name in ("LAYA_AGENT_PILOT_PROVIDER", "LAYA_AGENT_PILOT_BASE_URL", "LAYA_AGENT_PILOT_API_KEY",
+    for name in ("REVERIE_PILOT_PROVIDER", "REVERIE_PILOT_BASE_URL", "REVERIE_PILOT_API_KEY",
                  "TEXT_MODEL_PROVIDER", "OPENCODE_GO_API_KEY"):
         monkeypatch.delenv(name, raising=False)
     monkeypatch.setenv("TEXT_MODEL_BASE_URL", "https://openrouter.ai/api/v1")
     monkeypatch.setenv("TEXT_MODEL_API_KEY", "text-key")
     assert model.endpoint("pilot") == ("https://openrouter.ai/api/v1", "text-key", "openrouter")
-    monkeypatch.setenv("LAYA_AGENT_PILOT_BASE_URL", "https://gateway.example.com/v1/")
-    monkeypatch.setenv("LAYA_AGENT_PILOT_API_KEY", "pilot-key")
+    monkeypatch.setenv("REVERIE_PILOT_BASE_URL", "https://gateway.example.com/v1/")
+    monkeypatch.setenv("REVERIE_PILOT_API_KEY", "pilot-key")
     assert model.endpoint("pilot") == ("https://gateway.example.com/v1", "pilot-key", None)
     assert model.endpoint("text") == ("https://openrouter.ai/api/v1", "text-key", "openrouter")
     assert model.reasoning_options("https://gateway.example.com/v1", None, None) == {"reasoning": {"effort": "low"}}
@@ -885,12 +886,12 @@ def test_pilot_endpoint_falls_back_to_text_model_and_accepts_its_own(monkeypatch
 def test_opencode_go_provider_reads_the_opencode_key_and_sends_session_headers(tmp_path, monkeypatch):
     from reverie import model
 
-    for name in ("LAYA_AGENT_PILOT_BASE_URL", "LAYA_AGENT_PILOT_API_KEY", "OPENCODE_GO_API_KEY"):
+    for name in ("REVERIE_PILOT_BASE_URL", "REVERIE_PILOT_API_KEY", "OPENCODE_GO_API_KEY"):
         monkeypatch.delenv(name, raising=False)
     auth = tmp_path / "auth.json"
     auth.write_text(json.dumps({"opencode-go": {"type": "api", "key": "go-key"}}))
     monkeypatch.setenv("OPENCODE_AUTH_FILE", str(auth))
-    monkeypatch.setenv("LAYA_AGENT_PILOT_PROVIDER", "opencode-go")
+    monkeypatch.setenv("REVERIE_PILOT_PROVIDER", "opencode-go")
     assert model.endpoint("pilot") == ("https://opencode.ai/zen/go/v1", "go-key", "opencode-go")
     monkeypatch.setenv("OPENCODE_GO_API_KEY", "env-key")
     assert model.endpoint("pilot")[1] == "env-key"
@@ -904,7 +905,7 @@ def test_opencode_go_provider_reads_the_opencode_key_and_sends_session_headers(t
     output, _ = model.chat_json("s", {}, model="glm-5.3-flash", role="pilot")
     assert output == {"ok": True} and sent["url"] == "https://opencode.ai/zen/go/v1/chat/completions"
     assert sent["key"] == "env-key" and "x-opencode-session" in sent["headers"]
-    monkeypatch.setenv("LAYA_AGENT_PILOT_PROVIDER", "bogus")
+    monkeypatch.setenv("REVERIE_PILOT_PROVIDER", "bogus")
     with pytest.raises(ValueError):
         model.endpoint("pilot")
 
@@ -912,7 +913,7 @@ def test_opencode_go_provider_reads_the_opencode_key_and_sends_session_headers(t
 def test_openrouter_provider_uses_openrouter_api_key(monkeypatch):
     from reverie import model
 
-    for name in ("LAYA_AGENT_PILOT_PROVIDER", "LAYA_AGENT_PILOT_BASE_URL", "LAYA_AGENT_PILOT_API_KEY",
+    for name in ("REVERIE_PILOT_PROVIDER", "REVERIE_PILOT_BASE_URL", "REVERIE_PILOT_API_KEY",
                  "TEXT_MODEL_BASE_URL", "TEXT_MODEL_API_KEY"):
         monkeypatch.delenv(name, raising=False)
     monkeypatch.setenv("TEXT_MODEL_PROVIDER", "openrouter")

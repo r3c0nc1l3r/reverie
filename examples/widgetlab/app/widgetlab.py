@@ -3,7 +3,7 @@
 # requires-python = ">=3.11"
 # dependencies = []
 # ///
-"""WidgetLab: a small practice app for Reverie's decision engines (Laya, Jev, Mercury).
+"""WidgetLab: a small practice app for Reverie's decision engines (Jev, Laya) and its escalation model.
 
 It covers the decision types FieldOps does not: a multi-step wizard, native confirm and prompt dialogs,
 content that loads late, a file download, tabs, and type-ahead suggestions. Standard library only; all

@@ -30,7 +30,7 @@ def main():
     args = ap.parse_args()
     port = 9400 + os.getpid() % 500
     profile = tempfile.mkdtemp(prefix="gpucheck-")
-    cmd = [os.environ.get("LAYA_AGENT_BROWSER", "reverie-chromium"), f"--remote-debugging-port={port}",
+    cmd = [os.environ.get("REVERIE_BROWSER", "reverie-chromium"), f"--remote-debugging-port={port}",
            f"--user-data-dir={profile}", "--no-first-run", "--window-size=1300,2600", "about:blank"]
     if not args.headed:
         cmd.insert(1, "--headless=new")

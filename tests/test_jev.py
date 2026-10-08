@@ -91,16 +91,16 @@ def test_the_stack_uses_jev_when_the_session_engine_is_jev(tmp_path, monkeypatch
     s, used = jev_session(tmp_path, monkeypatch, decision)
     s.goal = "Click 'Submit'"
     proposal = s.suggest("stack")["proposal"]
-    assert used == ["jev"] and proposal["layer"] == "jev" and proposal["ref"] == "e3"
+    assert used == ["jev"] and proposal["layer"] == "decision" and proposal["decision_engine"] == "jev" and proposal["ref"] == "e3"
 
 
 def test_unsure_jev_escalates_to_mercury_under_the_stack(tmp_path, monkeypatch):
     decision = {"choice": "e3", "confidence": 0.3, "probabilities": {"e3": 0.3}, "operation": "CLICK"}
     s, used = jev_session(tmp_path, monkeypatch, decision)
-    monkeypatch.setattr(steer, "mercury_choose", lambda *a, **kw: (
+    monkeypatch.setattr(steer, "escalation_choose", lambda *a, **kw: (
         {"choice": "e1", "text": "order 8", "reason": "field first", "confidence": 0.8}, {"model": "mercury"}))
     proposal = s.suggest("stack")["proposal"]
-    assert proposal["layer"] == "mercury" and proposal["escalation"].startswith("Jev confidence 0.30")
+    assert proposal["layer"] == "escalation" and proposal["escalation"].startswith("Jev confidence 0.30")
 
 
 def test_jev_field_values_are_resolved_and_guarded_before_anything_runs(tmp_path, monkeypatch):
@@ -116,30 +116,75 @@ def test_jev_field_values_are_resolved_and_guarded_before_anything_runs(tmp_path
         s.suggest("jev")
 
 
-def test_session_engine_defaults_to_laya(tmp_path):
+def test_session_engine_defaults_to_jev(tmp_path):
     s = session(tmp_path)
-    assert s.fast_engine() == "laya"
-    s.engine = "jev"
     assert s.fast_engine() == "jev"
+    s.engine = "laya"
+    assert s.fast_engine() == "laya"
+
+
+def bare_session(monkeypatch, tmp_path, **kw):
+    from reverie.control import session as session_module
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(session_module, "HeadedBrowser", Mock())
+    monkeypatch.setattr(session_module, "Narrator", Mock(return_value=Mock(voice="off")))
+    monkeypatch.setattr(Session, "observe", lambda self, settle=False: None)
+    monkeypatch.setattr(session_module, "cdp", Mock())
+    return Session("https://example.com", name="engine", **kw)
+
+
+def no_key(monkeypatch):
+    for name in ("OPENROUTER_API_KEY", "TEXT_MODEL_API_KEY", "TEXT_MODEL_BASE_URL", "REVERIE_DECISION_ENGINE"):
+        monkeypatch.delenv(name, raising=False)
+
+
+def test_a_new_session_uses_jev_unless_told_otherwise(tmp_path, monkeypatch):
+    no_key(monkeypatch)
+    monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
+    assert bare_session(monkeypatch, tmp_path).fast_engine() == "jev"
+    monkeypatch.setenv("REVERIE_DECISION_ENGINE", "laya")
+    assert bare_session(monkeypatch, tmp_path).fast_engine() == "laya"
+    assert bare_session(monkeypatch, tmp_path, engine="jev").fast_engine() == "jev"  # the flag wins
+
+
+def test_jev_without_a_key_fails_at_start_with_the_fix(tmp_path, monkeypatch):
+    no_key(monkeypatch)
+    with pytest.raises(SessionError, match=r"OPENROUTER_API_KEY.*REVERIE_DECISION_ENGINE=laya"):
+        bare_session(monkeypatch, tmp_path)
+    monkeypatch.setenv("REVERIE_DECISION_ENGINE", "laya")  # local Laya needs no key
+    assert bare_session(monkeypatch, tmp_path).fast_engine() == "laya"
+
+
+def test_a_missing_key_mid_run_is_an_error_not_an_escalation(tmp_path, monkeypatch):
+    s = session(tmp_path)
+    s.goal, s.hints, s.pending, s.agent, s.engine = "Click 'Submit'", [], None, None, None
+
+    def missing(self, engine=None):
+        raise model.MissingKey("Jev, the default decision engine, needs an OpenRouter key.")
+
+    monkeypatch.setattr(Session, "_fast_propose", missing)
+    with pytest.raises(SessionError, match="needs an OpenRouter key"):
+        s.suggest("stack")
 
 
 def test_a_hint_does_not_block_the_fast_layer_when_mercury_is_off(tmp_path, monkeypatch):
-    monkeypatch.setenv("LAYA_AGENT_MERCURY", "off")
+    monkeypatch.setenv("REVERIE_ESCALATION", "off")
     decision = {"choice": "e3", "confidence": 0.99, "probabilities": {"e3": 0.99}, "operation": "CLICK"}
     s, used = jev_session(tmp_path, monkeypatch, decision)
     s.goal = "Click 'Submit'"
     s.add_hint("the Submit button at the bottom")
     proposal = s.suggest("stack")["proposal"]
-    assert proposal["layer"] == "jev" and proposal["ref"] == "e3" and proposal["escalation"] is None
+    assert proposal["layer"] == "decision" and proposal["decision_engine"] == "jev" and proposal["ref"] == "e3" and proposal["escalation"] is None
 
 
 def test_a_hint_still_goes_to_mercury_when_mercury_is_on(tmp_path, monkeypatch):
-    monkeypatch.setenv("LAYA_AGENT_MERCURY", "on")
+    monkeypatch.setenv("REVERIE_ESCALATION", "on")
     decision = {"choice": "e3", "confidence": 0.99, "probabilities": {"e3": 0.99}, "operation": "CLICK"}
     s, _ = jev_session(tmp_path, monkeypatch, decision)
     s.goal = "Click 'Submit'"
     s.add_hint("the Submit button at the bottom")
-    monkeypatch.setattr(steer, "mercury_choose", lambda *a, **kw: (
+    monkeypatch.setattr(steer, "escalation_choose", lambda *a, **kw: (
         {"choice": "e3", "text": None, "reason": "hinted", "confidence": 0.9}, {"model": "mercury"}))
     assert s.suggest("stack")["proposal"]["escalation"] == "orchestrator hint"
 
@@ -153,7 +198,7 @@ def test_a_bare_pilot_wait_means_the_observed_wait_action(tmp_path):
 
 
 def test_done_stays_done_when_mercury_is_off(tmp_path, monkeypatch):
-    monkeypatch.setenv("LAYA_AGENT_MERCURY", "off")
+    monkeypatch.setenv("REVERIE_ESCALATION", "off")
     decision = {"choice": "DONE", "confidence": 0.9, "probabilities": {"DONE": 0.9}, "operation": "DONE"}
     s, _ = jev_session(tmp_path, monkeypatch, decision)
     assert s.suggest("stack")["proposal"]["ref"] == "DONE"
@@ -205,5 +250,5 @@ def test_a_one_off_engine_does_not_change_the_session_engine(tmp_path, monkeypat
     s.goal, s.hints, s.agent, s.engine = "Click 'Submit'", [], None, None
     monkeypatch.setattr(agent_module, "Agent", lambda *a, decision_engine=None, **kw: Mock(
         state={"goal": a[1], "decision_engine": decision_engine, "status": "ready"}))
-    s.autonomous(s.goal, "jev")
-    assert s.fast_engine() == "laya"
+    s.autonomous(s.goal, "laya")
+    assert s.fast_engine() == "jev"

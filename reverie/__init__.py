@@ -1,4 +1,4 @@
-"""Laya (local) or Jev (hosted) chooses an observed action. Code owns execution."""
+"""A decision engine, Jev (hosted, the default) or Laya (local), chooses an observed action. Code owns execution."""
 
 __version__ = "0.1.0"  # x-release-please-version
 

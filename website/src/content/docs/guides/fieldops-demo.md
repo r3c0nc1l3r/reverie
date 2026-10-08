@@ -82,7 +82,7 @@ cd examples/fieldops
 reverie init
 ```
 
-`reverie init` creates `.reverie/` for runs and stored specs. (`laya-agent` is an alias for `reverie`.)
+`reverie init` creates `.reverie/` for runs and stored specs. (`laya-agent` is an older alias for `reverie`.)
 
 ### 2. Start a session and sign in
 

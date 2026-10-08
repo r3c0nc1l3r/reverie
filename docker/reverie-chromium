@@ -1,5 +1,5 @@
 #!/bin/sh
-# Chromium launcher for the container. Reverie runs it as LAYA_AGENT_BROWSER and adds its own flags
+# Chromium launcher for the container. Reverie runs it as REVERIE_BROWSER and adds its own flags
 # (--remote-debugging-port, --user-data-dir, --headless=new, ...). This wrapper adds the container flags.
 #
 #   REVERIE_GPU=auto|dri   use the Mesa GPU through /dev/dri (default when a render node exists)

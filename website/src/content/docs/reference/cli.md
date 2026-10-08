@@ -3,7 +3,7 @@ title: CLI reference
 description: Every reverie command, its options and defaults, and the exit codes.
 ---
 
-`reverie` drives a browser session one command at a time. `laya-agent` is an alias for the same program. The examples use `uv run reverie`, as in the README.
+`reverie` drives a browser session one command at a time. `laya-agent` is an older alias for the same program. The examples use `uv run reverie`, as in the README.
 
 ## Global options
 
@@ -11,7 +11,7 @@ Global options go before the command name. `--json` also works anywhere on the l
 
 | Option | Default | Description |
 | --- | --- | --- |
-| `--session NAME` | `$LAYA_AGENT_SESSION`, else `default` | The session to talk to. Every command except `init`, `runs`, `walkthrough`, `ui` and `start` (which creates the session) needs a running session with this name. |
+| `--session NAME` | `$REVERIE_SESSION`, else `default` | The session to talk to. Every command except `init`, `runs`, `walkthrough`, `ui` and `start` (which creates the session) needs a running session with this name. |
 | `--json` | off | Print the raw JSON result instead of the formatted text. |
 | `--version` | | Print the version (`reverie 0.1.0`) and exit. |
 | `-h`, `--help` | | Show help for `reverie` or for any command. |
@@ -19,14 +19,14 @@ Global options go before the command name. `--json` also works anywhere on the l
 ### How the session name is chosen
 
 1. `--session NAME`, if you pass it.
-2. Otherwise the `LAYA_AGENT_SESSION` environment variable.
+2. Otherwise the `REVERIE_SESSION` environment variable.
 3. Otherwise `default`.
 
 Use a different name for each browser session you run at the same time.
 
 ```bash
 uv run reverie --session demo start --url https://example.com
-export LAYA_AGENT_SESSION=demo   # or set it once for the shell
+export REVERIE_SESSION=demo   # or set it once for the shell
 uv run reverie status
 ```
 
@@ -113,7 +113,7 @@ reverie start --url URL [--voice VOICE] [--goal GOAL] [--engine {laya,jev}]
 | `--url URL` | required | The page to open. |
 | `--voice VOICE` | `auto` | Narration voice. One of `auto`, `kitten`, `kokoro`, `fish`, `espeak`, `spd`, `off`. |
 | `--goal GOAL` | none | Goal for autonomous `step` and `run`. |
-| `--engine {laya,jev}` | `$LAYA_AGENT_ENGINE`, else Laya | The session's fast decision layer. It drives `do`, `auto`, `step`, `run` and the pilot. Jev needs `OPENROUTER_API_KEY`. See [Decision engines](/reverie/reference/models/#decision-engines). |
+| `--engine {laya,jev}` | `$REVERIE_DECISION_ENGINE`, else `jev` | The session's decision engine: `jev` (hosted, the default, needs `OPENROUTER_API_KEY`) or `laya` (local laya.cpp or MLX, no key). It drives `do`, `auto`, `step`, `run` and the pilot. Without a key, a Jev session refuses to start and says to set the key or use `--engine laya`. See [Decision engines](/reverie/reference/models/#decision-engines). |
 | `--trail-dir TRAIL_DIR` | none | Directory for the session's trail. |
 | `--profile PROFILE` | per-session, isolated | Chromium profile directory. |
 | `--download-dir DOWNLOAD_DIR` | `$REVERIE_DOWNLOAD_DIR`, else `downloads/` in the run folder | Save browser downloads here. It never defaults to `~/Downloads`. |
@@ -226,7 +226,7 @@ reverie note text
 
 ### `goal`
 
-Set the current sub-goal for the fast model.
+Set the current sub-goal for the decision engine.
 
 ```text
 reverie goal goal
@@ -290,7 +290,7 @@ reverie do [--hint HINT] [--max MAX] [--until-text TEXT] [--until-url URL] inten
 | Argument or option | Default | Description |
 | --- | --- | --- |
 | `intent` | required | What to accomplish on the page. |
-| `--hint HINT` | none | Steering for the fast model, such as field names or which button. Repeatable. |
+| `--hint HINT` | none | Steering for the escalation model, such as field names or which button. Repeatable. |
 | `--max MAX` | `6` | The most steps to take. |
 | `--until-text TEXT` | none | Stop when this text appears. |
 | `--until-url URL` | none | Stop when this URL condition is met. |
@@ -374,17 +374,19 @@ Use these when you want to approve each move yourself.
 
 ### `suggest`
 
-The fast model proposes one step. Nothing runs until `accept`.
+The decision engine proposes one step. Nothing runs until `accept`.
 
 ```text
-reverie suggest [--engine {stack,mercury,laya,jev}] [--hint HINT] [--goal GOAL]
+reverie suggest [--engine {stack,escalation,mercury,laya,jev}] [--hint HINT] [--goal GOAL]
 ```
 
 | Option | Default | Description |
 | --- | --- | --- |
-| `--engine` | `stack` | `stack`: the session's fast layer (Laya, or Jev when the session uses it) proposes and Mercury overrules when it is unsure. Other choices: `mercury`, `laya`, `jev`. With `jev`, Jev decides this one command without Mercury. |
+| `--engine` | `stack` | `stack`: the decision engine proposes and the escalation model overrules when it is unsure. `escalation` (old name `mercury`, still accepted): the escalation model alone. `laya` or `jev`: that decision engine alone, for this one command. |
 | `--hint HINT` | none | Steer the model, for example `use the search box, not the menu`. |
 | `--goal GOAL` | none | Goal for this suggestion. |
+
+When the escalation model overruled the decision engine, the output adds a line such as `escalated: <reason> (Jev 0.41)`, with the engine's name and its confidence. The `layer=` field on the proposal line is `decision` or `escalation`.
 
 ### `accept`
 
@@ -404,16 +406,16 @@ reverie reject [--hint HINT]
 
 ### `auto`
 
-A fast loop. It pauses on low confidence, on DONE, BLOCKED or ADMIN, or when an until-condition is met.
+A fast loop of decision-engine steps. It pauses on low confidence, on DONE, BLOCKED or ADMIN, or when an until-condition is met.
 
 ```text
-reverie auto [--engine ENGINE] [--max MAX] [--min-confidence CONF]
+reverie auto [--engine {stack,escalation,mercury,laya,jev}] [--max MAX] [--min-confidence CONF]
              [--until-text TEXT] [--until-url URL] [--goal GOAL]
 ```
 
 | Option | Default | Description |
 | --- | --- | --- |
-| `--engine` | `stack` | One of `stack`, `mercury`, `laya`, `jev`. With `jev`, Jev decides without Mercury. |
+| `--engine` | `stack` | As for `suggest`: `stack`, `escalation` (old name `mercury`), `laya` or `jev`. |
 | `--max MAX` | `8` | The most steps to take. |
 | `--min-confidence CONF` | `0.55` | Pause when confidence drops below this. |
 | `--until-text TEXT` | none | Stop when this text appears. |
@@ -422,7 +424,7 @@ reverie auto [--engine ENGINE] [--max MAX] [--min-confidence CONF]
 
 ### `step` and `run`
 
-Autonomous Laya/Jev driving. `step` takes one step. `run` loops.
+Autonomous driving with a decision engine. `step` takes one step. `run` loops.
 
 ```text
 reverie step [--goal GOAL] [--engine {laya,jev}] [--confirm]
@@ -432,7 +434,7 @@ reverie run  [--goal GOAL] [--engine {laya,jev}] [--confirm] [--max-steps MAX_ST
 | Option | Default | Description |
 | --- | --- | --- |
 | `--goal GOAL` | none | The goal. |
-| `--engine {laya,jev}` | the session's engine | The engine to use for this command. |
+| `--engine {laya,jev}` | the session's engine | The decision engine to use for this command. |
 | `--confirm` | off | Ask in the window before each action. |
 | `--max-steps MAX_STEPS` | `20` | `run` only. The most steps to take. |
 

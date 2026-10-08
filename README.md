@@ -2,7 +2,7 @@
 
 # Reverie
 
-Reverie runs browser tests from Markdown specs. A local model makes each click, a multimodal pilot runs the spec step by step, and you control everything from a terminal CLI.
+Reverie runs browser tests from Markdown specs. A decision engine makes each click, a multimodal pilot runs the spec step by step, and you control everything from a terminal CLI.
 
 Reverie is the agent operation mode of [laya-ultrafast](https://github.com/Command-Perception/laya-ultrafast) as its own project. The browser agent, DOM snapshot, and executor come from [ipenywis/laya-ultrafast](https://github.com/ipenywis/laya-ultrafast) and [Browser Use's jev-ultrafast](https://github.com/browser-use/jev-ultrafast) (MIT).
 
@@ -12,7 +12,8 @@ Reverie is the agent operation mode of [laya-ultrafast](https://github.com/Comma
 
 | Layer | Does |
 |---|---|
-| Laya (laya.cpp, local) | Makes each click and keystroke from the actions observed on the page. |
+| Decision engine (layer 1): Jev, hosted (default), or Laya, local | Makes each click and keystroke from the actions observed on the page. |
+| Escalation model (layer 2): the text model, Mercury | Overrules the decision engine when it is unsure, looping, or off-goal. `REVERIE_ESCALATION=off` turns it off. |
 | Pilot (multimodal model, OpenRouter) | Runs the spec: sends intents, checks results, marks steps, records findings, reviews each step's screenshots, and speaks short progress updates. |
 | Orchestrator (you or an agent) | Starts sessions and specs, signs in, handles checkpoints (database and mail proof), and reviews verdicts. |
 
@@ -22,9 +23,11 @@ Guards keep the run safe: commit buttons (Save, Delete, Confirm, and similar) ne
 
 ```bash
 uv sync
-cp .env.example .env          # add OPENROUTER_API_KEY; point LAYA_BASE_URL at laya.cpp
-scripts/agent-services.sh start   # optional: laya.cpp and local Kitten TTS
+cp .env.example .env              # set OPENROUTER_API_KEY: it covers Jev, the pilot, and the text model
+scripts/agent-services.sh start   # optional: local Kitten TTS, and laya.cpp if you choose local Laya
 ```
+
+The default setup needs only an OpenRouter key. To run decisions locally instead, set `REVERIE_DECISION_ENGINE=laya` and point `LAYA_BASE_URL` at a laya.cpp server (or use `LAYA_BACKEND=mlx` on Apple Silicon); see [Decision engines](#decision-engines).
 
 Run commands from the project you test. Reverie writes run evidence to `.reverie/runs/` in that project (see [Runs and history](#runs-and-history)).
 
@@ -43,27 +46,45 @@ The pilot and the text helper call any OpenAI-compatible chat endpoint.
 
 | Setting | Text helper | Pilot (falls back to the text helper's value) |
 |---|---|---|
-| Provider preset: `openrouter`, `opencode-go`, `deepseek` | `TEXT_MODEL_PROVIDER` | `LAYA_AGENT_PILOT_PROVIDER` |
-| Base URL (wins over the preset) | `TEXT_MODEL_BASE_URL` | `LAYA_AGENT_PILOT_BASE_URL` |
-| API key | `TEXT_MODEL_API_KEY` | `LAYA_AGENT_PILOT_API_KEY` |
-| Model | `TEXT_MODEL` | `LAYA_AGENT_PILOT_MODEL` |
+| Provider preset: `openrouter`, `opencode-go`, `deepseek` | `TEXT_MODEL_PROVIDER` | `REVERIE_PILOT_PROVIDER` |
+| Base URL (wins over the preset) | `TEXT_MODEL_BASE_URL` | `REVERIE_PILOT_BASE_URL` |
+| API key | `TEXT_MODEL_API_KEY` | `REVERIE_PILOT_API_KEY` |
+| Model | `TEXT_MODEL` | `REVERIE_PILOT_MODEL` |
 
-With `openrouter`, the key falls back to `OPENROUTER_API_KEY`. With `opencode-go`, reverie reads the key from `OPENCODE_GO_API_KEY` or from OpenCode's `~/.local/share/opencode/auth.json` (`OPENCODE_AUTH_FILE` points it at another file, such as Pi's `~/.pi/agent/auth.json`). It sends the `reverie/<version>` user agent and one `x-opencode-session` id per process, as OpenCode Go requires. Example: `LAYA_AGENT_PILOT_PROVIDER=opencode-go` and `LAYA_AGENT_PILOT_MODEL=glm-5.3-flash`.
+With `openrouter`, the key falls back to `OPENROUTER_API_KEY`. With `opencode-go`, reverie reads the key from `OPENCODE_GO_API_KEY` or from OpenCode's `~/.local/share/opencode/auth.json` (`OPENCODE_AUTH_FILE` points it at another file, such as Pi's `~/.pi/agent/auth.json`). It sends the `reverie/<version>` user agent and one `x-opencode-session` id per process, as OpenCode Go requires. Example: `REVERIE_PILOT_PROVIDER=opencode-go` and `REVERIE_PILOT_MODEL=glm-5.3-flash`.
 
 ### Decision engines
 
-Under the pilot, a fast layer makes each click and keystroke, and Mercury (the text model) steps in when that layer is unsure.
+Layer 1, the decision engine, makes each click and keystroke. Layer 2, the escalation model (the text model, Mercury by default), steps in when the decision engine is unsure.
 
-| Engine | Where it runs | Choose it with |
-|---|---|---|
-| Laya (default) | Locally, through laya.cpp or MLX | nothing, or `--engine laya` |
-| Jev | Hosted on OpenRouter's Decisions API (`typesafe/jev-1.13`; `REMOTE_DECISION_MODEL` overrides it) | `reverie start --engine jev`, or `LAYA_AGENT_ENGINE=jev` |
+| Engine | Where it runs | Needs | Choose it with |
+|---|---|---|---|
+| Jev (default) | Hosted on OpenRouter's Decisions API (`typesafe/jev-1.13`; `REMOTE_DECISION_MODEL` overrides it) | `OPENROUTER_API_KEY` | nothing, or `--engine jev` |
+| Laya | Locally, through laya.cpp (`LAYA_BASE_URL`) or MLX (`LAYA_BACKEND=mlx`, the `mlx` extra) | a local model server, no key | `reverie start --engine laya`, or `REVERIE_DECISION_ENGINE=laya` |
 
-The session's engine drives `do`, `auto`, and the pilot. `suggest --engine jev`, `auto --engine jev`, and `step --engine jev` use Jev for one command without Mercury. Jev needs `OPENROUTER_API_KEY`. It picks the element; the text helper supplies any value to type before anything runs, so the stated-value guard applies to Jev as it does to Laya. A decision costs about $0.0001 and takes about 250 ms. `scripts/jev-smoke.sh` runs a live check (opt-in; `--e2e` also runs a WidgetLab spec headless with Jev).
+The session's engine drives `do`, `auto`, and the pilot. `suggest`, `auto`, and `step` also take `--engine` for one command. Without a key, a Jev session refuses to start and says how to fix it: set `OPENROUTER_API_KEY`, or choose Laya. Jev picks the element; the text helper supplies any value to type before anything runs, so the stated-value guard applies to every engine. A Jev decision costs about $0.0001 and takes about 250 ms. `scripts/jev-smoke.sh` runs a live check (opt-in; `--e2e` also runs a WidgetLab spec headless with Jev).
+
+Proposals, the run trail, and the dashboard name layers by role: `decision` (with `decision_engine`: `jev` or `laya`) and `escalation`. Runs recorded before the rename, which used `laya`, `jev`, and `mercury`, still display.
+
+### Renamed settings
+
+Reverie's own settings use the `REVERIE_` prefix. The old `LAYA_AGENT_` names still work; when both are set, the `REVERIE_` name wins.
+
+| Setting | Old name |
+|---|---|
+| `REVERIE_DECISION_ENGINE` | `LAYA_AGENT_ENGINE` |
+| `REVERIE_DECISION_MIN_CONFIDENCE` | `LAYA_AGENT_LAYA_MIN` |
+| `REVERIE_ESCALATION` | `LAYA_AGENT_MERCURY` |
+| `REVERIE_SESSION`, `REVERIE_BROWSER`, `REVERIE_VIEWPORT`, `REVERIE_DIALOGS`, `REVERIE_UI_PORT`, `REVERIE_UI_REVIEW` | `LAYA_AGENT_` + the same suffix |
+| `REVERIE_PILOT_MODEL`, `REVERIE_PILOT_PROVIDER`, `REVERIE_PILOT_BASE_URL`, `REVERIE_PILOT_API_KEY`, `REVERIE_PILOT_VISION`, `REVERIE_PILOT_STUCK` | `LAYA_AGENT_` + the same suffix |
+| `REVERIE_STEP_CEILING`, `REVERIE_STALL_SECONDS`, `REVERIE_PLAYBOOK` | `LAYA_AGENT_` + the same suffix |
+| `REVERIE_NARRATION`, `REVERIE_SPEECH_RATE`, `REVERIE_BLUETOOTH_AUDIO`, `REVERIE_AUDIO_WAKE`, `REVERIE_AUDIO_WAKE_IDLE` | `LAYA_AGENT_` + the same suffix |
+
+The `--engine mercury` value still selects the escalation model (now `--engine escalation`). Settings of the Laya backend itself (`LAYA_BACKEND`, `LAYA_BASE_URL`, `LAYA_HTTP_TIMEOUT`, `LAYA_TLS_CA`) keep their names.
 
 ## Use
 
-`reverie` and `laya-agent` are the same command.
+Use `reverie`; `laya-agent` is an older alias for the same command.
 
 ```bash
 uv run reverie --session demo start --url https://example.com   # one browser daemon per session
@@ -109,7 +130,7 @@ uv run reverie init          # create .reverie/ with a README, a .gitignore, run
 | `.reverie/runs/<session>-<stamp>/` | One run: `trail.jsonl` (every event, the source of truth), `run.json` (spec id, title, verdict, steps done), and `frames/` for replay. |
 | `.reverie/specs/` | Stored specs. The README there describes the format. |
 | `.reverie/cache/` | Disposable caches, such as narration audio. |
-| `.reverie/playbook.json` | Lessons the pilot keeps per host. `LAYA_AGENT_PLAYBOOK` overrides the path. |
+| `.reverie/playbook.json` | Lessons the pilot keeps per host. `REVERIE_PLAYBOOK` overrides the path. |
 
 Git ignores `runs/` and `cache/`. `init` is safe to run again; it creates only what is missing.
 

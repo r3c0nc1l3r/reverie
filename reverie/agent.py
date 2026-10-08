@@ -27,8 +27,8 @@ class Agent:
             raise ValueError("Supply a task")
         plan = [task]
         self.pending_text = None
-        # Local Laya decisions by default; the inspector can select hosted Jev per run.
-        decision_engine = decision_engine or "laya"
+        # Hosted Jev decisions by default; local Laya (laya.cpp or MLX) when chosen.
+        decision_engine = decision_engine or "jev"
         if decision_engine not in {"laya", "jev"}:
             raise ValueError("Decision engine must be laya or jev")
         self.policy = LayaPolicy(task) if decision_engine == "laya" else None

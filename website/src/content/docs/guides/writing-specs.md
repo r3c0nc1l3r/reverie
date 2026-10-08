@@ -182,6 +182,6 @@ The pilot works from your steps and from a fixed set of rules. These tips follow
 - **Say what must not be clicked.** Under `## Guidance`, list labels to avoid, such as a logo or a "Forgot password?" link.
 - **Mark terminal work as `[admin]`.** Database reads, mail lookups, log reads and fixture resets are not browser work. Never put passwords, codes or tokens in a spec; the orchestrator supplies secrets at run time with `reverie secret`.
 - **Say "signed out" or "private window" when you mean it.** The pilot can open an isolated tab with its own cookies for those steps.
-- **Keep steps and notes short.** Long text is truncated, and a shorter step is easier for the small local model to carry out.
+- **Keep steps and notes short.** Long text is truncated, and a shorter step is easier for the decision engine to carry out.
 
 Next: [Running specs](/reverie/guides/running-specs/).

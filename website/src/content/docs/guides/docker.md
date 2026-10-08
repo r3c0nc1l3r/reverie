@@ -11,7 +11,7 @@ The launcher keeps one container per project and runs each `reverie` command ins
 
 - Python 3.12 (Debian trixie base), [uv](https://docs.astral.sh/uv/), and Reverie with its locked dependencies.
 - Chromium, installed with Playwright's installer. Reverie does not depend on Playwright. It starts Chromium itself and talks to it over CDP. The installer is only a way to get the same Chromium build on both `linux/amd64` and `linux/arm64`.
-- `reverie-chromium`, a wrapper that adds the container flags (GPU, no-sandbox, shared-memory fix). The image sets `LAYA_AGENT_BROWSER` to it.
+- `reverie-chromium`, a wrapper that adds the container flags (GPU, no-sandbox, shared-memory fix). The image sets `REVERIE_BROWSER` to it.
 - The Mesa GPU stack (EGL, Vulkan, VA-API, `vainfo`). Intel VA-API drivers are included on amd64 only.
 - PulseAudio client tools and `mpv`, for [narration](/reverie/guides/narration/), including the `fish` voice. The offline `espeak` voices are not included.
 - A non-root `reverie` user (UID and GID 1000 by default; build args `REVERIE_UID` and `REVERIE_GID`). The launcher overrides it with your own UID and GID, so files written to mounted folders belong to you.
@@ -72,7 +72,7 @@ cd /path/to/my-project
 
 The container also gets a 1 GB `/dev/shm` (`REVERIE_SHM`).
 
-Host networking is the default. The container reaches `localhost` services on the host, such as your app under test or a laya.cpp server at `127.0.0.1:8080`. It also makes the [dashboard](/reverie/guides/runs-and-dashboard/) reachable on the host. With `REVERIE_DOCKER_NETWORK=bridge`, use `host.docker.internal` or published ports instead.
+Host networking is the default. The container reaches `localhost` services on the host, such as your app under test or, for local Laya, a laya.cpp server at `127.0.0.1:8080`. The default Jev engine needs only `OPENROUTER_API_KEY`, which can live in the mounted `.env` file above. Host networking also makes the [dashboard](/reverie/guides/runs-and-dashboard/) reachable on the host. With `REVERIE_DOCKER_NETWORK=bridge`, use `host.docker.internal` or published ports instead.
 
 ## Headless or headed
 

@@ -2,7 +2,7 @@
 
 WidgetLab is a small, fictional practice app with the widgets that trip up browser agents: a multi-step wizard with
 validation, native confirm and prompt dialogs, content that appears after a delay, a file download, tabs, and
-type-ahead suggestions. Use it to test Laya, Jev, and Mercury decisions locally, without a public site.
+type-ahead suggestions. Use it to test the decision engines (Jev and Laya) and the escalation model locally, without a public site.
 
 The app is one Python file using only the standard library. All data lives in memory.
 
@@ -40,7 +40,7 @@ All five pass on fresh data with either engine. No spec needs a sign-in.
 cd examples/widgetlab
 ./run.sh &
 reverie init
-reverie --session widgets start --url http://127.0.0.1:8766/ --engine jev    # or leave out --engine for Laya
+reverie --session widgets start --url http://127.0.0.1:8766/                 # Jev by default; --engine laya for local Laya
 reverie --session widgets spec specs/wl-01-signup-wizard.md
 reverie --session widgets pilot
 reverie --session widgets progress

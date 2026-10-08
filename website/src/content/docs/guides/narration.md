@@ -5,7 +5,7 @@ description: Spoken progress updates, the speech providers Reverie supports, and
 
 Reverie can speak short progress updates while a spec runs. Every action also gets a text caption in the browser window, so narration is optional. If audio fails, the run goes on.
 
-By default, only milestones are spoken: the pilot's progress updates, the start of a test, and session start and close. Set `LAYA_AGENT_NARRATION=verbose` to speak every caption as well.
+By default, only milestones are spoken: the pilot's progress updates, the start of a test, and session start and close. Set `REVERIE_NARRATION=verbose` to speak every caption as well.
 
 ## Voices
 
@@ -48,7 +48,7 @@ reverie --session demo start --url https://example.com --voice off
 | `KOKORO_VOICE` | `af_heart` | Kokoro voice. |
 | `FISH_AUDIO_API_TOKEN` | none | Fish Audio token. |
 | `FISH_AUDIO_VOICE_ID` | none | Fish Audio voice. |
-| `LAYA_AGENT_SPEECH_RATE` | `185` | Words per minute for `espeak`. |
+| `REVERIE_SPEECH_RATE` | `185` | Words per minute for `espeak`. |
 
 See the [configuration reference](/reverie/reference/configuration/) for the full list.
 
@@ -81,9 +81,9 @@ You can set the same options with environment variables:
 
 | Variable | Default | Does |
 |---|---|---|
-| `LAYA_AGENT_BLUETOOTH_AUDIO` | `0` | `1`, `true`, `on`, or `yes` turns Bluetooth mode on. |
-| `LAYA_AGENT_AUDIO_WAKE` | `1.2` | Seconds of wake-up sound. |
-| `LAYA_AGENT_AUDIO_WAKE_IDLE` | `4` | Seconds of silence before Reverie plays the wake-up sound again. |
+| `REVERIE_BLUETOOTH_AUDIO` | `0` | `1`, `true`, `on`, or `yes` turns Bluetooth mode on. |
+| `REVERIE_AUDIO_WAKE` | `1.2` | Seconds of wake-up sound. |
+| `REVERIE_AUDIO_WAKE_IDLE` | `4` | Seconds of silence before Reverie plays the wake-up sound again. |
 
 ## Narration in the dashboard
 

@@ -1,9 +1,9 @@
 """Pilot: a smarter, still inexpensive model that runs a whole test plan so the orchestrator stays high level.
 
 Layers, bottom up:
-  Laya     local typed decisions for each click or keystroke
-  Mercury  overrules Laya when Laya is unsure, looping, or off-goal
-  Pilot    (default z-ai/glm-5.3-flash) turns each plan step into intents for the Laya/Mercury stack,
+  Decision engine    a typed decision for each click or keystroke: jev (hosted, default) or laya (local)
+  Escalation model   the text model (Mercury); overrules the decision engine when it is unsure, looping, or off-goal
+  Pilot    (default z-ai/glm-5.3-flash) turns each plan step into intents for that stack,
            verifies results with checks, marks steps, and moves between tabs and sites
   Orchestrator  starts tests, resolves admin checkpoints (database, logs, mail API, secrets), reviews verdicts
 
@@ -17,11 +17,12 @@ import time
 from urllib.parse import urlparse
 
 from .. import model
+from ..settings import setting
 
 DEFAULT_MODEL = "z-ai/glm-5.3-flash"
 
 PILOT = """You are the pilot of a QA browser test. You run the test plan one operation at a time. Fast layers below
-you (Laya, then Mercury) click and type; you give them short, concrete intents and verify the outcome.
+you (a decision engine, then an escalation model) click and type; you give them short, concrete intents and verify the outcome.
 
 Answer with JSON only, one operation:
 {"op": "do", "intent": "<one concrete UI goal, e.g. Open Dispatch then Work Order>", "hints": ["<optional
@@ -136,7 +137,7 @@ def lessons_for(hosts):
 
 
 def pilot_model():
-    return os.environ.get("LAYA_AGENT_PILOT_MODEL", DEFAULT_MODEL)
+    return setting("REVERIE_PILOT_MODEL", DEFAULT_MODEL)
 
 
 def context_for(session, step, log):
@@ -333,7 +334,7 @@ Use high for anything that blocks or misleads a user, medium for clearly broken 
 
 def ui_review(session, step, files):
     """Multimodal review of a step's frames. Returns {"issues": [...], "summary": "..."} or None."""
-    if os.environ.get("LAYA_AGENT_UI_REVIEW", "1") == "0" or not files:
+    if setting("REVERIE_UI_REVIEW", "1") == "0" or not files:
         return None
     import base64
     import io
@@ -372,7 +373,7 @@ def ui_review(session, step, files):
 
 def marked_screenshot(session, width=1280):
     """The current frame with a yellow id tag on every on-screen control (set-of-marks) for the vision pilot."""
-    if not session.frame or os.environ.get("LAYA_AGENT_PILOT_VISION", "1") == "0":
+    if not session.frame or setting("REVERIE_PILOT_VISION", "1") == "0":
         return None
     import base64
     import io

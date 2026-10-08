@@ -1,6 +1,6 @@
 """One headed, narrated browser session. Every mutation goes through the observed-action executor.
 
-The controlling agent (a person, a coding agent, or the Laya/Jev policy) picks among actions that the
+The controlling agent (a person, a coding agent, or a decision engine: Jev or Laya) picks among actions that the
 last observation actually contains. Nothing here accepts selectors or executable code from the caller.
 """
 
@@ -16,6 +16,8 @@ from pathlib import Path
 from browser_harness.helpers import cdp
 
 from ..browser import Browser, StalePage
+from ..model import MissingKey
+from ..settings import setting
 from . import downloads
 from .narrator import Narrator
 from .project import runs_dir, spec_id, write_run_summary
@@ -92,7 +94,7 @@ class SessionError(ValueError):
 class HeadedBrowser(Browser):
     """The standard observed-action browser, brought to the front of a visible window."""
 
-    VIEWPORT = tuple(int(v) for v in os.environ.get("LAYA_AGENT_VIEWPORT", "1920x1080").lower().split("x"))
+    VIEWPORT = tuple(int(v) for v in setting("REVERIE_VIEWPORT", "1920x1080").lower().split("x"))
 
     def __init__(self, url, prepare=None):
         self.prepare = prepare  # Also called with each isolated context's id, so its downloads go to the same folder.
@@ -110,7 +112,7 @@ class HeadedBrowser(Browser):
 
     def observe(self, screenshot=True, screenshot_fallback=True):
         # Agent sessions see the whole page; off-screen controls come back flagged offscreen.
-        policy = getattr(self, "dialog_answer", None) or os.environ.get("LAYA_AGENT_DIALOGS", "accept")
+        policy = getattr(self, "dialog_answer", None) or setting("REVERIE_DIALOGS", "accept")
         answer = "false" if policy == "dismiss" else "true"
         prompt_text = json.dumps(getattr(self, "prompt_text", None))
         # Native dialogs would block CDP input; answer them per policy and record what they said.
@@ -180,8 +182,13 @@ def element(action):
     return {k: action[k] for k in fields if action.get(k) not in (None, "")}
 
 
-def mercury_disabled():
-    return os.environ.get("LAYA_AGENT_MERCURY", "on").lower() in {"off", "0", "false", "no"}
+DECISION, ESCALATION = "decision", "escalation"
+ESCALATED = {ESCALATION, "mercury"}  # "mercury" in runs and sessions from before the rename
+
+
+def escalation_disabled():
+    """The escalation layer (Mercury, the text model) is switched off with REVERIE_ESCALATION=off."""
+    return setting("REVERIE_ESCALATION", "on").lower() in {"off", "0", "false", "no"}
 
 
 class Session:
@@ -193,10 +200,17 @@ class Session:
         self.prompt = None
         self.external_reply = None
         self.goal = goal
-        # The fast decision layer under the stack: local Laya, or hosted Jev on OpenRouter.
-        self.engine = engine or os.environ.get("LAYA_AGENT_ENGINE", "").strip().lower() or None
+        # The fast decision layer under the stack: hosted Jev on OpenRouter (default), or local Laya.
+        self.engine = engine or setting("REVERIE_DECISION_ENGINE", "").strip().lower() or None
         if self.engine not in {None, "laya", "jev"}:
-            raise ValueError("LAYA_AGENT_ENGINE must be laya or jev")
+            raise ValueError("REVERIE_DECISION_ENGINE must be laya or jev")
+        if self.fast_engine() == "jev":
+            from ..model import MissingKey, openrouter_key
+
+            try:
+                openrouter_key()  # Fail at start, with the fix, rather than on the first step.
+            except MissingKey as error:
+                raise SessionError(str(error)) from None
         self.agent = None
         self.history = []
         self.caption = ""
@@ -211,7 +225,7 @@ class Session:
         self.checkpoints = []
         self.tab_list = []
         self.dialogs = []
-        self.laya_min = float(os.environ.get("LAYA_AGENT_LAYA_MIN", "0.6"))
+        self.laya_min = float(setting("REVERIE_DECISION_MIN_CONFIDENCE", "0.6"))
         stamp = time.strftime("%Y%m%d-%H%M%S")
         self.started = time.strftime("%Y-%m-%dT%H:%M:%S")
         self.trail_dir = Path(trail_dir or runs_dir()) / f"{name}-{stamp}"
@@ -347,11 +361,14 @@ class Session:
                 pass
 
     # ---- layered steering -----------------------------------------------------------------------------
-    # Layer 1  Laya     local typed decisions on every step (fast, cheap).
-    # Layer 2  Mercury  plans each goal (inside Laya's policy) and overrules Laya when Laya is unsure,
-    #                   repeating itself, stopping, or when the orchestrator has just given a hint.
-    # Layer 3  Orchestrator (the controlling agent): goals, hints, checks, plan marks, admin checkpoints.
-    ENGINES = ("stack", "mercury", "laya", "jev")
+    # Layer 1  decision engine    a typed decision on every step: jev (hosted, default) or laya (local).
+    # Layer 2  escalation model   the text model (Mercury); overrules the decision engine when it is unsure,
+    #                             repeating itself, stopping, or when the orchestrator has just given a hint.
+    # Layer 3  orchestrator (the controlling agent, or the pilot): goals, hints, checks, plan marks, checkpoints.
+    # Proposals and the trail name the layer by role ("decision", "escalation"); `decision_engine` says which
+    # engine decided. Runs written before the rename used "laya", "jev" and "mercury"; readers map them.
+    ENGINES = ("stack", "escalation", "laya", "jev")
+    ENGINE_ALIASES = {"mercury": "escalation"}
 
     def set_goal(self, goal):
         with self.lock:
@@ -359,7 +376,7 @@ class Session:
             self.hints = []
             self.fresh_hint = False
             self.pending = None
-            self.agent = None  # Laya re-plans (through Mercury) once per goal.
+            self.agent = None  # The decision engine re-plans once per goal.
             self.goal_start = len(self.history)
             self.avoid, self.allow_values, self.read_only = [], [], False
             self.log("goal", goal=self.goal)
@@ -368,8 +385,8 @@ class Session:
 
     def add_hint(self, hint):
         self.hints.append(hint)
-        self.fresh_hint = True  # The next step goes to Mercury, which reads hints directly.
-        self.agent = None  # Laya re-plans through Mercury with the hints folded into its goal.
+        self.fresh_hint = True  # The next step goes to the escalation model, which reads hints directly.
+        self.agent = None  # The decision engine re-plans with the hints folded into its goal.
         self.log("hint", hint=hint)
 
     def laya_goal(self):
@@ -384,8 +401,8 @@ class Session:
                  "label": labels.get(ref, {}).get("label", ref)} for ref, p in ranked]
 
     def fast_engine(self):
-        """The layer that makes each typed decision under the stack: laya (default) or jev."""
-        return getattr(self, "engine", None) or "laya"
+        """The layer that makes each typed decision under the stack: jev (default, hosted) or laya (local)."""
+        return getattr(self, "engine", None) or "jev"
 
     def _fast_propose(self, engine=None):
         engine = engine or self.fast_engine()
@@ -430,8 +447,8 @@ class Session:
 
     def _escalation(self, decision):
         who = self.fast_engine().title()
-        if self.fresh_hint and not mercury_disabled():
-            # Mercury reads hints directly. With Mercury off, the fast layer already has the hint in its goal
+        if self.fresh_hint and not escalation_disabled():
+            # The escalation model reads hints directly. With it off, the decision engine already has the hint in its goal
             # (laya_goal), so a fresh hint alone must not block every step.
             return "orchestrator hint"
         if decision["choice"] in {"DONE", "BLOCKED"}:
@@ -445,9 +462,9 @@ class Session:
         if action and action["kind"] == "fill" and typed and not self.stated_value(typed):
             return f"{who} would type a value the goal does not state"
         last = self.history[-1] if self.history else {}
-        if action and action["kind"] == "fill" and last.get("by") == "mercury" and last.get("kind") == "fill" \
+        if action and action["kind"] == "fill" and last.get("by") in ESCALATED and last.get("kind") == "fill" \
                 and last.get("label") == action.get("label") and last.get("text") != decision.get("text"):
-            return f"{who} would undo Mercury's last entry"
+            return f"{who} would undo the escalation model's last entry"
         # A confident click that shares no words with the goal, while another visible element clearly does,
         # is the classic "confident but wrong" pick (a site logo instead of the named button).
         if action and action["kind"] == "click":
@@ -473,15 +490,15 @@ class Session:
             return f"{who} is repeating a two-step cycle"
         return None
 
-    def _mercury(self, candidates=None, escalation=None):
-        from .steer import mercury_choose
+    def _escalate(self, candidates=None, escalation=None):
+        from .steer import escalation_choose
 
         plan = self.agent.state.get("goal_plan") if self.agent else None
         self.tab_list = [t for t in self.browser.tabs() if t["url"] != "about:blank"]
         tabs = [{"tab": f"TAB:{i}", "title": t["title"][:80], "url": t["url"][:160], "current": t["current"]}
                 for i, t in enumerate(self.tab_list)]
         try:
-            choice, meta = mercury_choose(self.goal, self.page, self.history, self.hints,
+            choice, meta = escalation_choose(self.goal, self.page, self.history, self.hints,
                                           candidates=candidates, escalation=escalation, plan=plan, tabs=tabs)
         except ValueError as error:
             raise SessionError(str(error)) from error
@@ -490,29 +507,30 @@ class Session:
 
     def suggest(self, engine="stack", hint=None, goal=None):
         """Propose exactly one next step. Nothing executes until accept."""
+        engine = self.ENGINE_ALIASES.get(engine, engine)
         if engine not in self.ENGINES:
             raise SessionError(f"Engine must be one of {', '.join(self.ENGINES)}")
         with self.lock:
             if goal:
                 self.set_goal(goal)
             if not self.goal:
-                raise SessionError('Set a goal first (laya-agent goal "...")')
+                raise SessionError('Set a goal first (reverie goal "...")')
             if hint:
                 self.add_hint(hint)
             self.observe()
             started = time.perf_counter()
-            layer, model, escalation, laya_confidence, candidates = engine, engine, None, None, None
+            layer, model, escalation, decision_confidence, candidates = engine, engine, None, None, None
             decided = {}
+            fast = self.fast_engine() if engine in {"stack", "escalation"} else engine
             if engine in {"stack", "laya", "jev"}:
                 try:
-                    fast = self.fast_engine() if engine == "stack" else engine
                     decision = self._fast_propose(fast)
-                    laya_confidence = round(float(decision.get("confidence", 0.0)), 3)
+                    decision_confidence = round(float(decision.get("confidence", 0.0)), 3)
                     candidates = self._laya_candidates(decision, self.page)
                     choice = {"choice": decision["choice"], "text": decision.get("text"),
-                              "confidence": laya_confidence,
+                              "confidence": decision_confidence,
                               "reason": f"{decision.get('operation', '')} {decision.get('target', '')}".strip()}
-                    layer = fast
+                    layer = DECISION
                     # What the fast decision cost, for the trail: model, its own latency, and USD (Jev reports it).
                     usage = decision.get("usage") or {}
                     decided = {"decision_model": decision.get("model"), "decision_ms": decision.get("latency_ms"),
@@ -520,42 +538,46 @@ class Session:
                     escalation = self._escalation(decision) if engine == "stack" else None
                     typed = (decision.get("text") or "").strip().lower()
                     if engine == "jev" and typed and not self.stated_value(typed):
-                        # Without Mercury behind it, Jev has the same rule as Mercury: only stated values.
+                        # Without the escalation model behind it, Jev keeps the same rule: only stated values.
                         raise SessionError(f"Jev would type {decision['text']!r}, which the goal does not state. "
                                            "Nothing executed; state the value in quotes.")
                 except (SessionError, StalePage, RuntimeError, ValueError) as error:
+                    if isinstance(error, MissingKey):
+                        raise SessionError(str(error)) from None  # A missing key is a setup error, not doubt.
                     if engine != "stack":
                         raise SessionError(f"{engine} could not decide: {error}") from error
                     escalation = f"{self.fast_engine().title()} unavailable: {error}"
-            mercury_off = mercury_disabled()
-            if escalation and mercury_off and engine == "stack" and choice.get("choice") == "DONE" \
+            escalation_off = escalation_disabled()
+            if escalation and escalation_off and engine == "stack" and choice.get("choice") == "DONE" \
                     and escalation.endswith("reported DONE"):
-                # Nobody is behind the fast layer to confirm DONE; report it as DONE and let the caller check.
+                # Nobody is behind the decision engine to confirm DONE; report it as DONE and let the caller check.
                 escalation = None
-            elif escalation and mercury_off and engine == "stack":
-                # Mercury disabled: Laya's doubtful step goes back to the pilot (which can act by sight) unexecuted.
+            elif escalation and escalation_off and engine == "stack":
+                # Escalation off: a doubtful step goes back to the pilot (which can act by sight) unexecuted.
                 choice = {"choice": "BLOCKED", "text": None, "confidence": 0.0,
-                          "reason": f"{self.fast_engine().title()} escalated ({escalation}) and Mercury is disabled"}
-                layer = self.fast_engine()
-            elif engine == "mercury" and mercury_off:
-                raise SessionError("Mercury is disabled (LAYA_AGENT_MERCURY=off)")
-            elif engine == "mercury" or escalation:
+                          "reason": f"{self.fast_engine().title()} escalated ({escalation}) and the escalation model "
+                                    "is off"}
+                layer = DECISION
+            elif engine == "escalation" and escalation_off:
+                raise SessionError("The escalation model is off (REVERIE_ESCALATION=off)")
+            elif engine == "escalation" or escalation:
                 if self.agent and self.agent.state.get("decision"):
-                    self.agent.state["decision"] = None  # Mercury overrules Laya's unexecuted pick.
-                choice, model = self._mercury(candidates, escalation)
-                layer = "mercury"
+                    self.agent.state["decision"] = None  # The escalation model overrules the unexecuted pick.
+                choice, model = self._escalate(candidates, escalation)
+                layer = ESCALATION
                 typed = (choice.get("text") or "").strip().lower()
                 if typed and typed not in (self.goal + " " + " ".join(self.hints)).lower() \
                         and typed not in getattr(self, "allow_values", []):
-                    # Mercury has the same rule as Laya: it types only values the goal or hints state.
-                    raise SessionError(f"Mercury would type {choice['text']!r}, which the goal does not state. "
+                    # The escalation model has the same rule: it types only values the goal or hints state.
+                    raise SessionError(f"The escalation model would type {choice['text']!r}, which the goal does not "
+                                       "state. "
                                        "Nothing executed; state the value in quotes.")
             action = next((a for a in self.page["actions"] if a["id"] == choice["choice"]), None)
             avoided = action and any(a in action.get("label", "").lower() for a in getattr(self, "avoid", []))
-            if avoided and layer != "mercury":
-                # Laya picked a control the pilot fenced off: let Mercury choose instead.
-                choice, model = self._mercury(candidates, f"{layer.title()} chose a control the pilot said to avoid")
-                layer = "mercury"
+            if avoided and layer != ESCALATION:
+                # The decision engine picked a control the pilot fenced off: let the escalation model choose.
+                choice, model = self._escalate(candidates, f"{fast.title()} chose a control the pilot said to avoid")
+                layer = ESCALATION
                 action = next((a for a in self.page["actions"] if a["id"] == choice["choice"]), None)
                 avoided = action and any(a in action.get("label", "").lower() for a in getattr(self, "avoid", []))
             word = commit_word((action or {}).get("label")) if action and action["kind"] == "click" \
@@ -576,21 +598,22 @@ class Session:
                 tab = self.tab_list[int(choice["choice"][4:])]
                 label = f"Switching to the tab '{tab['title'][:60]}'"
             self.pending = {**choice, "engine": engine, "layer": layer, "model": model, "ref": choice["choice"],
-                            "label": label, "escalation": escalation, "laya_confidence": laya_confidence,
+                            "label": label, "escalation": escalation, "decision_engine": fast,
+                            "decision_confidence": decision_confidence,
                             "fingerprint": self.page["fingerprint"], **decided,
                             "latency_ms": round((time.perf_counter() - started) * 1000)}
             self.log("suggest", **{k: v for k, v in self.pending.items() if k != "fingerprint"})
-            who = {"mercury": "Mercury", "laya": "Laya", "jev": "Jev"}[layer]
+            who = "The escalation model" if layer == ESCALATION else fast.title()
             spoken = f"{who} suggests: {label}"
-            if escalation and layer == "mercury" and engine == "stack":
-                spoken = f"Escalated to Mercury, {escalation}. {spoken}"
+            if escalation and layer == ESCALATION and engine == "stack":
+                spoken = f"Escalated, {escalation}. {spoken}"
             self.say(spoken, highlight=(action or {}).get("rect"), speak=False)
             if choice["choice"] == "ADMIN":
                 if getattr(self, "pilot_thread", None) is threading.current_thread():
                     # Under a pilot run, the pilot decides whether admin work is really needed.
                     self.pending = {**self.pending, "ref": "BLOCKED", "choice": "BLOCKED"}
                 else:
-                    self.checkpoint(choice.get("reason") or "The fast layers asked for an administrative action",
+                    self.checkpoint(choice.get("reason") or "The decision layers asked for an administrative action",
                                     source=layer)
             return {"proposal": self.public_pending(), **self.summary()}
 
@@ -611,10 +634,11 @@ class Session:
                 self.log("act", **self.history[-1])
                 return result
             if proposal["ref"] in {"DONE", "BLOCKED", "ADMIN"}:
-                self.say(f"{proposal['layer'].title()} reports {proposal['ref']}: {proposal.get('reason', '')}", speak=False)
+                who = proposal.get("decision_engine") if proposal["layer"] == DECISION else "the escalation model"
+                self.say(f"{str(who).capitalize()} reports {proposal['ref']}: {proposal.get('reason', '')}", speak=False)
                 return {"status": proposal["ref"].lower(), **self.summary()}
-            if proposal["layer"] in {"laya", "jev"} and proposal["ref"] == "wait":
-                # A wait changes nothing; run it unguarded and keep Laya's history in step.
+            if proposal["layer"] == DECISION and proposal["ref"] == "wait":
+                # A wait changes nothing; run it unguarded and keep the decision engine's history in step.
                 self.agent.state["decision"] = None
                 result = self.act("wait", narration="Waiting for the page to update", by=proposal["layer"])
                 self.agent.state["history"].append({
@@ -623,7 +647,7 @@ class Session:
                     "url": self.page["url"], "by": proposal["layer"]})
                 return result
             target = next((a for a in self.page["actions"] if a["id"] == proposal["ref"]), None)
-            if proposal["layer"] in {"laya", "jev"} and target and target.get("offscreen"):
+            if proposal["layer"] == DECISION and target and target.get("offscreen"):
                 self.agent.state["decision"] = None
                 result = self.act(proposal["ref"], text=proposal.get("text"), narration=proposal["label"],
                                   by=proposal["layer"])
@@ -633,7 +657,7 @@ class Session:
                     "page_changed": result.get("page_changed"), "url": result.get("url_after"),
                     "by": proposal["layer"]})
                 return result
-            if proposal["layer"] in {"laya", "jev"}:
+            if proposal["layer"] == DECISION:
                 agent = self.agent
                 origin = self.browser.evaluate("performance.timeOrigin")
                 try:
@@ -644,7 +668,8 @@ class Session:
                 last = agent.state["history"][-1]
                 step = {"step": len(self.history) + 1, "label": last["action"], "kind": last["kind"],
                         "text": last.get("text"), "url": last["url"], "by": proposal["layer"],
-                        "confidence": proposal.get("laya_confidence")}
+                        "decision_engine": proposal.get("decision_engine"),
+                        "confidence": proposal.get("decision_confidence")}
                 self.history.append(step)
                 self.log("act", **step)
                 self.settle(origin)
@@ -658,12 +683,12 @@ class Session:
             result = self.act(proposal["ref"], text=proposal.get("text"), narration=proposal["label"],
                               by=proposal["layer"], escalation=proposal.get("escalation"))
             if self.agent:
-                # Keep Laya's own history aligned so its policy sees what Mercury executed.
+                # Keep the decision engine's history aligned so it sees what the escalation model executed.
                 self.agent.state["history"].append({
                     "step": len(self.agent.state["history"]) + 1, "action": result.get("label"),
                     "kind": result.get("kind"), "choice": proposal["ref"], "text": proposal.get("text"),
                     "page_changed": result.get("page_changed"), "url": result.get("url_after"),
-                    "by": "mercury"})
+                    "by": ESCALATION})
             return result
 
     def reject(self, hint=None):
@@ -677,13 +702,13 @@ class Session:
             self.log("reject", dropped=(dropped or {}).get("ref"), hint=hint)
             return {"rejected": (dropped or {}).get("label"), "hints": self.hints, **self.summary()}
 
-    CEILING = int(os.environ.get("LAYA_AGENT_STEP_CEILING", "25"))
+    CEILING = int(setting("REVERIE_STEP_CEILING", "25"))
     STALL = 3
 
     def auto(self, engine="stack", max_steps=None, min_confidence=0.55, until_text=None, until_url=None):
-        """Fast loop. Pauses for the orchestrator on low Mercury confidence, DONE/BLOCKED/ADMIN, an
+        """Fast loop. Pauses for the orchestrator on low escalation-model confidence, DONE/BLOCKED/ADMIN, an
         until-condition, or a refused step. A pending suggestion stays available after a pause."""
-        steps, layers = [], {"laya": 0, "mercury": 0, "jev": 0}
+        steps, layers = [], {DECISION: 0, ESCALATION: 0}
         reason = "max_steps"
         stale = 0
         still = 0  # Consecutive executed actions that changed nothing on the page.
@@ -700,7 +725,7 @@ class Session:
             if proposal["ref"] in {"DONE", "BLOCKED", "ADMIN"}:
                 reason = proposal["ref"].lower()
                 break
-            if proposal["layer"] == "mercury" and proposal["confidence"] < min_confidence:
+            if proposal["layer"] == ESCALATION and proposal["confidence"] < min_confidence:
                 reason = "low_confidence"
                 break
             try:
@@ -748,7 +773,8 @@ class Session:
 
     def do(self, intent, hints=(), max_steps=6, until_text=None, until_url=None, min_confidence=0.55,
            avoid=(), allow_values=(), read_only=False):
-        """The default way to drive a test step: state the intent; Laya acts and Mercury steps in when needed.
+        """The default way to drive a test step: state the intent; the decision engine acts and the escalation model
+        steps in when needed.
         Direct act/fill commands stay available for when the stack pauses."""
         with self.lock:
             # A stop condition that already holds would end the intent after one action; ignore it.
@@ -773,7 +799,7 @@ class Session:
 
     # ---- admin checkpoints: the session defers terminal work to the orchestrator ---------------------
     # The daemon never runs shell commands. A checkpoint records what is needed; the orchestrator runs it
-    # from its own terminal (laya-agent exec / resolve) and the result is written back into the session.
+    # from its own terminal (reverie exec / resolve) and the result is written back into the session.
     def checkpoint(self, title, command=None, step=None, source="orchestrator"):
         with self.lock:
             if source not in {"orchestrator", "plan"}:
@@ -917,7 +943,7 @@ class Session:
 
     def mark(self, n, status, note="", recap=True):
         if not self.test:
-            raise SessionError("Load a test plan first (laya-agent plan)")
+            raise SessionError("Load a test plan first (reverie plan or reverie spec)")
         if status not in self.STEP_STATES:
             raise SessionError(f"Status must be one of {', '.join(self.STEP_STATES)}")
         steps = self.test["steps"]
@@ -1030,10 +1056,10 @@ class Session:
             return None  # A navigating page drops the overlay; the next observation restores it.
 
     def say(self, text, highlight=None, wait=False, speak=True):
-        """Caption every line; speak only milestones unless LAYA_AGENT_NARRATION=verbose."""
+        """Caption every line; speak only milestones unless REVERIE_NARRATION=verbose."""
         self.caption = text
         self.render(highlight)
-        if not speak and os.environ.get("LAYA_AGENT_NARRATION", "summary") != "verbose":
+        if not speak and setting("REVERIE_NARRATION", "summary") != "verbose":
             self.log("caption", text=text)
             if highlight:
                 self.capture()
@@ -1321,12 +1347,15 @@ class Session:
         with self.lock:
             return {"closed": self.tidy_tabs(), **self.summary()}
 
-    CONFIG_KEYS = {"TEXT_MODEL_REASONING", "TEXT_MODEL", "LAYA_AGENT_PILOT_MODEL", "TEXT_MODEL_EFFORT", "LAYA_AGENT_MERCURY",
-                   "LAYA_AGENT_STALL_SECONDS", "LAYA_AGENT_UI_REVIEW", "LAYA_AGENT_PILOT_PROVIDER",
-                   "LAYA_AGENT_PILOT_BASE_URL"}
+    CONFIG_KEYS = {"TEXT_MODEL_REASONING", "TEXT_MODEL", "REVERIE_PILOT_MODEL", "TEXT_MODEL_EFFORT", "REVERIE_ESCALATION",
+                   "REVERIE_STALL_SECONDS", "REVERIE_UI_REVIEW", "REVERIE_PILOT_PROVIDER",
+                   "REVERIE_PILOT_BASE_URL"}
 
     def cmd_config(self, key, value):
         """Change a model or harness setting in this running daemon (no secrets, whitelisted keys only)."""
+        from ..settings import current_name
+
+        key = current_name(key)  # an old LAYA_AGENT_* name sets its REVERIE_* setting
         if key not in self.CONFIG_KEYS:
             raise SessionError(f"key must be one of {', '.join(sorted(self.CONFIG_KEYS))}")
         os.environ[key] = str(value)
@@ -1460,12 +1489,12 @@ class Session:
             self.external_reply = {"id": self.prompt["id"], "choice": choice, "text": text}
             return {"answered": self.prompt["id"]}
 
-    # ---- autonomous Laya / Jev steps ---------------------------------------------------------------
+    # ---- autonomous decision-engine steps ---------------------------------------------------------------
     def autonomous(self, goal=None, engine=None):
         from ..agent import Agent
 
         goal = goal or self.goal
-        engine = engine or self.engine or "laya"
+        engine = engine or self.fast_engine()
         if not goal:
             raise SessionError("Autonomous steps need a goal (--goal)")
         if self.agent is None or self.agent.state["goal"] != goal or self.agent.state["decision_engine"] != engine:
@@ -1497,9 +1526,10 @@ class Session:
             choice = decision["choice"]
             target = next((a for a in state["page"]["actions"] if a["id"] == choice), None)
             words = choice if target is None else self.phrase(target, decision.get("text"))
-            self.say(f"Laya chose: {words}", highlight=(target or {}).get("rect"), speak=False)
+            who = state["decision_engine"].title()
+            self.say(f"{who} chose: {words}", highlight=(target or {}).get("rect"), speak=False)
         if confirm:
-            answer = self.ask(f"Laya wants to: {words}", ["Approve", "Skip", "Stop"], allow_text=False)
+            answer = self.ask(f"{who} wants to: {words}", ["Approve", "Skip", "Stop"], allow_text=False)
             if answer["choice"] != "Approve":
                 with self.lock:
                     state["decision"] = None
@@ -1516,7 +1546,8 @@ class Session:
             if state["history"]:
                 last = state["history"][-1]
                 self.history.append({"step": len(self.history) + 1, "label": last["action"], "kind": last["kind"],
-                                     "text": last.get("text"), "url": last["url"], "by": state["decision_engine"]})
+                                     "text": last.get("text"), "url": last["url"], "by": DECISION,
+                                     "decision_engine": state["decision_engine"]})
                 self.log("act", **self.history[-1])
             self.settle(origin)
             self.observe()
@@ -1544,7 +1575,7 @@ class Session:
         self.log("note", text=self.notes[-1])
         return {"notes": self.notes, **self.summary()}
 
-    PILOT_STUCK = int(os.environ.get("LAYA_AGENT_PILOT_STUCK", "12"))
+    PILOT_STUCK = int(setting("REVERIE_PILOT_STUCK", "12"))
 
     def pilot(self, max_ops=150, through=None):
         """Run the loaded plan from its first open step. Pauses for admin work, a question, a failed or
@@ -1552,7 +1583,7 @@ class Session:
         from . import pilot as pilot_module
 
         if not self.test:
-            raise SessionError("Load a test plan first (laya-agent plan)")
+            raise SessionError("Load a test plan first (reverie plan or reverie spec)")
         self.notes = getattr(self, "notes", [])
         log, reason = [], "budget"
         self.status = "piloting"
@@ -1735,7 +1766,7 @@ class Session:
         importlib.reload(narrator)
         old = self.narrator
         self.narrator.__class__ = narrator.Narrator
-        for attr, value in (("bluetooth", os.environ.get("LAYA_AGENT_BLUETOOTH_AUDIO", "0").lower()
+        for attr, value in (("bluetooth", setting("REVERIE_BLUETOOTH_AUDIO", "0").lower()
                              in {"1", "true", "on", "yes"}), ("wake_seconds", 1.2), ("wake_after_idle", 4.0),
                             ("last_audio", 0.0)):
             if not hasattr(old, attr):
@@ -1767,7 +1798,7 @@ class Session:
         threading.Thread(target=self._watchdog, args=(self.pilot_thread,), daemon=True).start()
         return {"started": True, "from_ref": len(self.__dict__.get("feed", [])), **self.summary()}
 
-    STALL_SECONDS = int(os.environ.get("LAYA_AGENT_STALL_SECONDS", "240"))
+    STALL_SECONDS = int(setting("REVERIE_STALL_SECONDS", "240"))
 
     def _watchdog(self, runner):
         """Heartbeat check: a running pilot that logs nothing for STALL_SECONDS is stalled (a hung model or

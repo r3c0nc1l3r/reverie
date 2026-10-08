@@ -1,9 +1,9 @@
 ---
 title: Reverie
-description: Spec-driven browser tests. A local model makes each click, a multimodal pilot runs the spec, and you drive it all from a terminal CLI.
+description: Spec-driven browser tests. A decision engine makes each click, a multimodal pilot runs the spec, and you drive it all from a terminal CLI.
 template: splash
 hero:
-  tagline: Run browser tests from Markdown specs. A local model makes each click, a multimodal pilot runs the spec step by step, and you control everything from the terminal.
+  tagline: Run browser tests from Markdown specs. A decision engine makes each click, a multimodal pilot runs the spec step by step, and you control everything from the terminal.
   image:
     file: ../../assets/logo.svg
   actions:
@@ -26,9 +26,10 @@ import { Card, CardGrid } from '@astrojs/starlight/components';
 ## How it works
 
 <CardGrid>
-	<Card title="Laya (local)" icon="laptop">
-		A small local model served by laya.cpp makes each click and keystroke from the elements it
-		observes on the page.
+	<Card title="Decision engine" icon="laptop">
+		Jev, hosted on OpenRouter, makes each click and keystroke from the elements it observes on the
+		page. Local Laya is the offline option. A text model (the escalation model) steps in when the
+		engine is unsure.
 	</Card>
 	<Card title="Pilot (multimodal)" icon="rocket">
 		A multimodal model runs the spec: it sends intents, checks results, marks steps, records

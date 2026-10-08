@@ -9,11 +9,13 @@ Reverie runs browser tests from Markdown specs. AI agents drive it; people read 
 
 | Layer | Code | Does |
 |---|---|---|
-| Laya (local, laya.cpp) | `reverie/laya.py`, `decision_backend.py` | Picks each click and keystroke from the actions observed on the page. |
+| Decision engine (layer 1) | `reverie/model.py` (Jev, hosted, default), `reverie/laya.py` + `decision_backend.py` (Laya, local) | Picks each click and keystroke from the actions observed on the page. |
+| Escalation model (layer 2) | `reverie/control/steer.py` | The text model (Mercury) overrules the decision engine when it is unsure. |
 | Browser | `reverie/browser.py`, `snapshot.js` | One CDP session through Browser Harness. Observes elements and executes observed actions. |
 | Pilot (OpenAI-compatible model) | `reverie/control/pilot.py`, `reverie/model.py` | Runs a spec step by step: intents, checks, marks, findings, lessons, narration. |
 | Session daemon | `reverie/control/server.py`, `session.py`, `downloads.py` | One headed Chromium and one `Session` per `--session` name, driven over loopback with a token. |
-| CLI | `reverie/control/cli.py` | `reverie` (alias `laya-agent`). Every command talks to a session daemon. |
+| CLI | `reverie/control/cli.py` | `reverie` (older alias `laya-agent`). Every command talks to a session daemon. |
+| Settings | `reverie/settings.py` | `REVERIE_*` settings and their old `LAYA_AGENT_*` aliases (the new name wins). |
 | Dashboard | `reverie/control/dashboard.py` + `.html` | Run history, live runs, replay, and watch pages on 127.0.0.1:7788. |
 | Project state | `reverie/control/project.py` | Finds `.reverie/` like git finds `.git`, lists the `.env` files, writes run summaries, and imports old runs. |
 | Narration | `reverie/control/narrator.py`, `speech.py`, `kitten.py`, `kokoro.py`, `fish_audio.py` | Spoken progress on a background thread. |
@@ -76,8 +78,9 @@ uv run reverie --session demo stop
 - Exit codes: 0 ok, 1 check failed, 2 refused, 3 error, 4 no session.
 - Daemon state lives in `$XDG_RUNTIME_DIR/laya-agent/` (or `~/.cache/laya-agent/`).
 - One session name per test account. Do not run two sessions against the same account.
-- A live run needs laya.cpp (`LAYA_BASE_URL`) and a key for the pilot's model endpoint (`.env.example` selects
-  OpenRouter; see "Model endpoints" in `README.md`). Unit tests need neither.
+- A live run needs `OPENROUTER_API_KEY` for Jev, the default decision engine, and for the pilot's endpoint
+  (see "Decision engines" and "Model endpoints" in `README.md`). With `REVERIE_DECISION_ENGINE=laya` it needs
+  laya.cpp (`LAYA_BASE_URL`) instead of the Jev key. Unit tests need neither.
 - Stop your sessions when you finish. If a Chromium profile is locked (exit 21), find the orphan
   process by its profile path and stop that process only. Do not kill processes by name.
 
@@ -104,7 +107,9 @@ that starts with `[admin]` becomes a checkpoint for the orchestrator. After a pa
 - **Trail format.** `trail.jsonl` is the source of truth, and the dashboard, replay, and `walkthrough`
   read it. Keep old event shapes readable when you add fields.
 - **Environment variables.** Add new settings to `.env.example` with a comment. Match the prefix of related
-  settings: `LAYA_AGENT_` for agent and pilot behavior, `REVERIE_` for project, download, and container settings.
+  Reverie's own settings use the `REVERIE_` prefix and are read with `settings.setting()`. Never add a new
+  `LAYA_AGENT_` name; those exist only as aliases in `reverie/settings.py`. Name layers by role (decision
+  engine, escalation model, pilot), not by vendor.
 - **UI.**
   - Follow `DESIGN.md`.
   - Use react-icons Lucide icons (`react-icons/lu`) and never emojis.
