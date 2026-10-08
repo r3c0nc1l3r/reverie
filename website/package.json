@@ -1,0 +1,22 @@
+{
+  "name": "reverie-docs",
+  "type": "module",
+  "version": "0.0.0",
+  "private": true,
+  "scripts": {
+    "dev": "astro dev",
+    "start": "astro dev",
+    "build": "astro build",
+    "preview": "astro preview",
+    "check:links": "node scripts/check-links.mjs",
+    "astro": "astro"
+  },
+  "dependencies": {
+    "@astrojs/starlight": "^0.42.5",
+    "astro": "^7.3.7",
+    "sharp": "^0.35.5"
+  },
+  "devDependencies": {
+    "playwright": "^1.64.0"
+  }
+}

@@ -1,0 +1,43 @@
+import { Meta } from "@storybook/addon-docs/blocks";
+
+<Meta title="Overview" />
+
+<img src="./banner.png" alt="Reverie" style={{ width: "100%", borderRadius: 12 }} />
+
+# UI concepts
+
+These concepts rethink the reverie dashboard around the job it supports. **AI agents drive every test and resolve their own problems. People review the results.** So the UI is history first: it shows the current run and the past runs that Reverie keeps in the project's `.reverie/` directory (`.reverie/runs/<session>-<stamp>/` holds `run.json`, `trail.jsonl`, and `frames/`).
+
+The concepts use shadcn/ui on one Reverie theme (`src/index.css`, dark first, verdict and actor tokens). All icons come from one set: Lucide, through `react-icons/lu`. The UI uses no emoji. The design rules for agents that change this UI are in [`DESIGN.md`](https://github.com/r3c0nc1l3r/reverie/blob/main/DESIGN.md) at the repository root. Data is shaped like the real `trail.jsonl`. The frames come from the DEMO-01 run against the public practice site.
+
+## What gets in the way today
+
+Seen while running a suite with four sessions at once:
+
+1. **Checkpoints are almost invisible.** The dashboard has no queue and no way to resolve one, so every sign-in and database proof needs the CLI.
+2. **One run at a time.** There is no view of all live sessions or of past runs. Parallel runs need a script that polls each session.
+3. **The timeline is a flat event log.** A 3-step run records about 110 events. Step boundaries, checks, and findings drown in pilot turns and captions.
+4. **"Fail" hides the reason.** An app defect, a harness slip, a missing fixture, and a withdrawn finding all look the same.
+5. **Findings are free text.** No severity triage, no "by design" or "withdrawn" state, and no link to the frame.
+6. **One frame at a time.** You cannot see what the click changed or which element was targeted.
+
+## The concepts
+
+1. **Run review** (problems 2, 3, 4). The primary view. A history rail lists the current run (pinned, with a live marker) and the past runs from `.reverie/runs/`, grouped by day and searchable. The center shows the spec outline: each step with its verdict, the agent's progress, and the agent's notes as a timeline with a play button for narration audio. Findings and the visual review sit in their step. The individual clicks (often 60 or more for one step) stay in a collapsible Actions drawer; select one to see its before and after frames.
+2. **Mission control** (problems 1, 2). A card for each session with a live frame, the current step, time since the last action, a step strip, the pilot's last spoken update, and an inline checkpoint. A banner counts what is waiting.
+3. **Checkpoint inbox** (problem 1). One queue across sessions. Each item shows what the pilot knows, the suggested command (copy or run here), fact chips, a secret lint on the note, and Done, Failed, and Skip with "resume the pilot".
+4. **Run view** (problems 3, 4, 5). Steps are the spine. Actions, checks, findings, and the visual review sit inside their step. Raw events stay one click away. A breakdown counts pass, app finding, harness slip, and so on.
+5. **Frame compare** (problem 6). Before (with the target ring) and after for each action, side by side or as a swipe.
+6. **Suite matrix** (problems 2, 4). Tests by run history, with the reason for every non-pass and filters for "needs attention" and "live".
+7. **Findings triage** (problem 5). A board with open, by design, withdrawn, and fixed. Changing the state updates the step verdict, so a withdrawn finding stops blocking a pass.
+
+## The verdict model
+
+The concepts split today's single "fail" into **app finding**, **harness slip**, **blocked**, and **not run**, and add **needs you** for checkpoints. The daemon already records the facts needed: findings with severity, checkpoint states, and orchestrator notes. Only the dashboard's summary logic would change.
+
+## Suggested order
+
+1. Run review: it is the view people use most.
+2. Checkpoint inbox and mission control: they remove the most CLI work.
+3. Verdict model and run view.
+4. Findings triage, suite matrix, and frame compare.

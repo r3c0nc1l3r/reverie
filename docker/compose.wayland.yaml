@@ -1,0 +1,7 @@
+# Headed Chromium on the host Wayland compositor.
+services:
+  reverie:
+    environment:
+      WAYLAND_DISPLAY: ${WAYLAND_DISPLAY:-wayland-0}
+    volumes:
+      - ${XDG_RUNTIME_DIR}/${WAYLAND_DISPLAY:-wayland-0}:/runtime/${WAYLAND_DISPLAY:-wayland-0}

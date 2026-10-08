@@ -1,0 +1,172 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>reverie replay</title>
+<style>
+  :root { --bg:#07080b; --panel:#141821; --line:#262b36; --text:#e6e8ee; --muted:#8b93a7; --amber:#f5b041;
+    --pass:#3fb950; --fail:#f85149; --blue:#9ecbff; --violet:#d2a8ff; --green:#7ee787; }
+  * { box-sizing:border-box; }
+  html, body { margin:0; height:100%; overflow:hidden; background:radial-gradient(ellipse at center, #121622 0%, var(--bg) 70%);
+    color:var(--text); font:15px/1.45 system-ui, sans-serif; }
+  #stage { position:absolute; left:50%; top:50%; width:0; height:0; perspective:2400px; }
+  #canvas { position:absolute; transform-style:preserve-3d; transition:transform 900ms cubic-bezier(.55,.05,.25,1); }
+  .slide { position:absolute; width:1600px; height:1000px; left:-800px; top:-500px; border-radius:18px; overflow:hidden;
+    background:var(--panel); border:1px solid var(--line); box-shadow:0 30px 80px #000a; opacity:.28;
+    transition:opacity 700ms; display:flex; flex-direction:column; }
+  .slide.active, body.overview .slide { opacity:1; }
+  .slide img { width:100%; height:900px; object-fit:contain; background:#000; display:block; }
+  .slide .cap { flex:1; display:flex; gap:14px; align-items:center; padding:0 26px; font-size:26px; }
+  .slide .cap .who { font-weight:700; padding:3px 14px; border-radius:999px; font-size:20px; background:var(--line); }
+  .who.laya { background:#12361d; color:var(--green); } .who.mercury { background:#3b2a5c; color:var(--violet); }
+  .who.orchestrator { background:#4a3510; color:var(--amber); } .who.pilot { background:#0f3b44; color:#79e2f2; } .who.pass { background:#12361d; color:var(--pass); }
+  .who.fail { background:#3d1413; color:var(--fail); } .who.blocked { background:#4a3510; color:var(--amber); }
+  .card { padding:70px 90px; justify-content:center; gap:18px; }
+  .card h1 { font-size:64px; margin:0; line-height:1.1; } .card h2 { font-size:34px; margin:0; color:var(--muted); font-weight:500; }
+  .card ol { font-size:26px; margin:10px 0 0; padding-left:40px; } .card li { margin:6px 0; }
+  .card .res { font-size:30px; font-weight:700; } .pass { color:var(--pass); } .fail { color:var(--fail); }
+  .blocked, .incomplete { color:var(--amber); } .running { color:var(--blue); }
+  .said { position:absolute; left:40px; right:40px; bottom:120px; padding:14px 22px; border-radius:14px;
+    background:#000c; font-size:24px; font-style:italic; }
+  .stamp { position:absolute; top:16px; left:20px; padding:4px 14px; border-radius:999px; background:#000b; font-size:18px; color:var(--muted); }
+  #hud { position:fixed; left:0; right:0; bottom:0; padding:10px 18px; display:flex; gap:14px; align-items:center;
+    background:linear-gradient(transparent, #000c); font-size:14px; color:var(--muted); }
+  #bar { flex:1; height:6px; border-radius:6px; background:var(--line); overflow:hidden; cursor:pointer; }
+  #fill { height:100%; width:0; background:var(--amber); transition:width 400ms; }
+  #empty { position:fixed; inset:0; display:grid; place-items:center; color:var(--muted); font-size:20px; }
+</style>
+</head>
+<body>
+<div id="stage"><div id="canvas"></div></div>
+<div id="empty">Loading replay…</div>
+<div id="hud"><span id="pos"></span><div id="bar"><div id="fill"></div></div>
+  <span id="narr"></span><span>← → ↑ ↓ or space · Home/End · O overview · N narration · Esc back</span></div>
+<script>
+const params = new URLSearchParams(location.search);
+// Narration playback: the spoken lines recorded with a frame play when you land on it.
+const narration = (() => {
+  const bluetooth = __BLUETOOTH__;  // Bluetooth audio mode: wake sleeping headphones before speech.
+  let on = true, current = null, token = 0, lastEnd = 0, ctx = null;
+  try { on = localStorage.getItem("laya-narration") !== "off"; } catch {}
+  async function wake() {
+    if (!bluetooth || performance.now() - lastEnd < 4000) return;
+    ctx = ctx || new AudioContext();
+    const buffer = ctx.createBuffer(1, Math.round(ctx.sampleRate * 1.2), ctx.sampleRate);
+    const data = buffer.getChannelData(0);
+    for (let i = 0; i < data.length; i++) data[i] = (Math.random() - 0.5) * 0.001;  // about -66 dBFS
+    const src = ctx.createBufferSource(); src.buffer = buffer; src.connect(ctx.destination);
+    await new Promise((done) => { src.onended = done; src.start(); });
+  }
+  function stop() { token++; if (current) { current.pause(); current = null; } }
+  async function play(lines) {
+    stop();
+    if (!on || !lines || !lines.length) return;
+    const mine = token;
+    await wake();
+    for (const line of lines) {
+      if (mine !== token) return;
+      current = new Audio(`/api/speech?text=${encodeURIComponent(line)}`);
+      try { await current.play(); await new Promise((done) => { current.onended = done; current.onerror = done; }); }
+      catch { return; }
+      lastEnd = performance.now();
+    }
+  }
+  function toggle() { on = !on; try { localStorage.setItem("laya-narration", on ? "on" : "off"); } catch {} if (!on) stop(); return on; }
+  return { play, stop, toggle, get on() { return on; } };
+})();
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+const marks = { pending:"○", running:"▶", pass:"✓", fail:"✗", blocked:"!", skipped:"–" };
+let slides = [], nodes = [], at = 0, overview = false;
+
+function frameUrl(s) { return `/api/frame?dir=${encodeURIComponent(s.dir)}&file=${encodeURIComponent(s.frame)}`; }
+
+function layout() {
+  // Impress-style path: each test is a row; its slides step right with a gentle wave and tilt.
+  let row = -1, col = 0;
+  return slides.map((s) => {
+    if (s.kind === "title" || col >= 10) { row += 1; col = 0; }  // Wrap long runs into rows of ten.
+    const x = col * 1900, y = row * 1500 + Math.sin(col * 0.9) * 160;
+    const r = s.kind === "title" ? 0 : ((col % 2) ? 2 : -2), scale = s.kind === "title" ? 1.25 : 1;
+    col += 1;
+    return { x, y, r, scale };
+  });
+}
+
+function render(s) {
+  const who = s.kind === "verdict" ? s.status : s.kind === "check" ? (s.passed ? "pass" : "fail")
+    : s.kind === "ui" ? (s.severity === "high" ? "fail" : "blocked") : s.kind === "nav" ? "nav" : (s.by || "");
+  const stamp = `<div class="stamp">${esc(s.test || s.title)}${s.step ? ` · step ${s.step}` : ""}</div>`;
+  if (s.kind === "title") return `<div class="card slide"><h2>${esc(s.session)} · ${esc((s.started || "").replace("T", " "))}</h2>
+    <h1>${esc(s.title)}</h1><div class="res ${esc(s.result)}">${esc(s.result)}</div>
+    <ol>${s.steps.map((st) => `<li class="${esc(st.status)}">${marks[st.status] || "○"} ${esc(st.title.slice(0, 110))}</li>`).join("")}</ol></div>`;
+  if (s.kind === "step") return `<div class="card slide">${stamp}<h2>Step ${s.step}</h2><h1 style="font-size:46px">${esc(s.title)}</h1></div>`;
+  if (s.kind === "verdict" && !s.frame) return `<div class="card slide">${stamp}<h2>Step ${s.step}</h2>
+    <h1 class="${esc(s.status)}">${esc(String(s.status).toUpperCase())}</h1><div style="font-size:28px">${esc(s.note || "")}</div>
+    ${s.said ? `<div style="font-size:24px;font-style:italic;color:var(--muted)">“${esc(s.said)}”</div>` : ""}</div>`;
+  const cap = s.kind === "verdict" ? `Step ${s.step} ${String(s.status).toUpperCase()}${s.note ? ` — ${s.note}` : ""}` : s.caption;
+  const img = s.frame ? `<img data-src="${esc(frameUrl(s))}" alt="Browser at this moment">` : `<div style="height:900px"></div>`;
+  return `<div class="slide">${img}${stamp}${s.said && s.kind === "verdict" ? `<div class="said">“${esc(s.said)}”</div>` : ""}
+    <div class="cap">${who ? `<span class="who ${esc(who)}">${esc({laya:"Laya",mercury:"Mercury",pilot:"Pilot",orchestrator:"Claude"}[who] || who)}</span>` : ""}<span>${esc(String(cap || "").length > 150 ? String(cap).slice(0, 147) + "…" : cap)}</span></div></div>`;
+}
+
+function go(i) {
+  const before = at;
+  at = Math.max(0, Math.min(slides.length - 1, i));
+  if (!overview && (at !== before || !nodes[at].played)) { nodes[at].played = true; narration.play(slides[at].speech); }
+  const p = nodes[at].pos, fit = Math.min(innerWidth / 1750, innerHeight / 1100) / p.scale;
+  document.body.classList.toggle("overview", overview);
+  $("canvas").style.transform = overview ? overviewTransform() :
+    `scale(${fit}) rotate(${-p.r}deg) translate(${-p.x}px, ${-p.y}px)`;
+  nodes.forEach((n, k) => {
+    n.el.classList.toggle("active", k === at);
+    const img = n.el.querySelector("img[data-src]");
+    if (img && (overview || Math.abs(k - at) <= 3)) { img.src = img.dataset.src; img.removeAttribute("data-src"); }
+  });
+  $("pos").textContent = `${at + 1} / ${slides.length}`;
+  $("fill").style.width = `${((at + 1) / slides.length) * 100}%`;
+  history.replaceState(null, "", `#${at + 1}`);
+}
+
+function overviewTransform() {
+  const xs = nodes.map((n) => n.pos.x), ys = nodes.map((n) => n.pos.y);
+  const w = Math.max(...xs) - Math.min(...xs) + 2000, h = Math.max(...ys) - Math.min(...ys) + 1600;
+  const cx = (Math.max(...xs) + Math.min(...xs)) / 2, cy = (Math.max(...ys) + Math.min(...ys)) / 2;
+  return `scale(${Math.min(innerWidth / w, innerHeight / h)}) translate(${-cx}px, ${-cy}px)`;
+}
+
+async function load() {
+  const query = params.get("run") ? `run=${encodeURIComponent(params.get("run"))}` : `suite=${encodeURIComponent(params.get("suite") || "")}`;
+  const data = await fetch(`/api/deck?${query}`, {cache:"no-store"}).then((r) => r.json());
+  slides = data.slides || [];
+  document.title = `Replay · ${data.title || "runs"}`;
+  if (!slides.length) { $("empty").textContent = "No saved frames for this selection yet."; return; }
+  $("empty").remove();
+  const positions = layout();
+  $("canvas").innerHTML = slides.map(render).join("");
+  nodes = [...$("canvas").children].map((el, k) => {
+    const p = positions[k];
+    el.style.transform = `translate(${p.x}px, ${p.y}px) rotate(${p.r}deg) scale(${p.scale})`;
+    el.onclick = () => { overview = false; go(k); };
+    return { el, pos: p };
+  });
+  go(Math.max(0, (parseInt(location.hash.slice(1), 10) || 1) - 1));
+}
+
+document.addEventListener("keydown", (e) => {
+  if (["ArrowRight", "ArrowDown", "PageDown", " ", "j", "l"].includes(e.key)) { e.preventDefault(); overview = false; go(at + 1); }
+  else if (["ArrowLeft", "ArrowUp", "PageUp", "k", "h"].includes(e.key)) { e.preventDefault(); overview = false; go(at - 1); }
+  else if (e.key === "Home") go(0); else if (e.key === "End") go(slides.length - 1);
+  else if (e.key === "o" || e.key === "O") { overview = !overview; narration.stop(); go(at); }
+  else if (e.key === "n" || e.key === "N") { narration.toggle(); showNarr(); }
+  else if (e.key === "Escape") history.length > 1 ? history.back() : null;
+});
+$("bar").onclick = (e) => { const r = $("bar").getBoundingClientRect(); overview = false; go(Math.floor((e.clientX - r.left) / r.width * slides.length)); };
+addEventListener("resize", () => nodes.length && go(at));
+function showNarr() { $("narr").textContent = narration.on ? "🔊 narration on" : "🔇 narration off"; }
+showNarr();
+load();
+</script>
+</body>
+</html>

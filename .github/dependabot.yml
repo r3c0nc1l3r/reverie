@@ -1,0 +1,16 @@
+version: 2
+updates:
+  - package-ecosystem: uv
+    directory: /
+    schedule: { interval: weekly }
+    groups: { python: { patterns: ["*"] } }
+    commit-message: { prefix: build, include: scope }
+  - package-ecosystem: npm
+    directory: /ui
+    schedule: { interval: weekly }
+    groups: { ui: { patterns: ["*"] } }
+    commit-message: { prefix: build, include: scope }
+  - package-ecosystem: github-actions
+    directory: /
+    schedule: { interval: monthly }
+    commit-message: { prefix: ci }

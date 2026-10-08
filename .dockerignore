@@ -1,0 +1,13 @@
+.git
+.venv
+.reverie
+.env
+.pytest_cache
+.ruff_cache
+__pycache__
+artifacts
+ui
+docs
+examples
+tests
+node_modules

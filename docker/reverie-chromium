@@ -1,0 +1,51 @@
+#!/bin/sh
+# Chromium launcher for the container. Reverie runs it as LAYA_AGENT_BROWSER and adds its own flags
+# (--remote-debugging-port, --user-data-dir, --headless=new, ...). This wrapper adds the container flags.
+#
+#   REVERIE_GPU=auto|dri   use the Mesa GPU through /dev/dri (default when a render node exists)
+#   REVERIE_GPU_BACKEND=egl|vulkan   ANGLE backend for the GPU (default egl)
+#   REVERIE_GPU=nvidia     same flags; the NVIDIA container toolkit supplies the driver (docs/docker.md)
+#   REVERIE_GPU=off        software rendering (SwiftShader); also the fallback when /dev/dri is missing
+#   REVERIE_CHROMIUM_SANDBOX=1   keep Chromium's own sandbox (needs --cap-add SYS_ADMIN or a custom seccomp profile)
+#   REVERIE_CHROMIUM_FLAGS       extra flags, space separated
+set -eu
+
+exe="$(ls -d /opt/ms-playwright/chromium-*/chrome-linux*/chrome 2>/dev/null | head -n 1)"
+[ -x "$exe" ] || { echo "reverie-chromium: Playwright Chromium not found" >&2; exit 127; }
+
+gpu="${REVERIE_GPU:-auto}"
+if [ "$gpu" = "auto" ]; then
+    if ls /dev/dri/renderD* >/dev/null 2>&1; then gpu=dri; else gpu=off; fi
+fi
+
+# Container basics: the container is the sandbox, and /dev/shm is small unless --shm-size is set.
+set -- "$@" --disable-dev-shm-usage --disable-background-networking --no-first-run
+[ "${REVERIE_CHROMIUM_SANDBOX:-0}" = "1" ] || set -- "$@" --no-sandbox
+[ -z "${REVERIE_DOWNLOAD_DIR:-}" ] || export REVERIE_DOWNLOAD_DIR
+
+if [ "$gpu" = "dri" ] || [ "$gpu" = "nvidia" ]; then
+    # Headless Chromium falls back to SwiftShader unless ANGLE is told to use the EGL/Mesa driver.
+    # REVERIE_GPU_BACKEND=vulkan uses ANGLE-on-Vulkan (RADV/ANV) instead of ANGLE-on-GL (radeonsi/iris).
+    backend="${REVERIE_GPU_BACKEND:-egl}"
+    if [ "$backend" = "vulkan" ]; then
+        set -- "$@" --use-angle=vulkan --enable-features=Vulkan,VulkanFromANGLE,DefaultANGLEVulkan,VaapiVideoDecoder,VaapiVideoEncoder,VaapiIgnoreDriverChecks
+    else
+        set -- "$@" --use-gl=angle --use-angle=gl-egl --enable-features=VaapiVideoDecoder,VaapiVideoEncoder,VaapiIgnoreDriverChecks,AcceleratedVideoDecodeLinuxGL
+    fi
+    # Reverie passes its own --disable-features; the last switch wins, so repeat its list here.
+    set -- "$@" --disable-features=Translate,MediaRouter,UseChromeOSDirectVideoDecoder \
+        --ignore-gpu-blocklist --enable-gpu-rasterization --enable-zero-copy
+else
+    set -- "$@" --disable-gpu --use-gl=angle --use-angle=swiftshader --enable-unsafe-swiftshader
+fi
+
+# Headed: choose the display platform explicitly (--ozone-platform-hint=auto fell back to X11 and failed in testing).
+headless=0
+for a in "$@"; do case "$a" in --headless*) headless=1 ;; esac; done
+if [ "$headless" = "0" ]; then
+    if [ -n "${WAYLAND_DISPLAY:-}" ]; then set -- "$@" --ozone-platform=wayland
+    elif [ -n "${DISPLAY:-}" ]; then set -- "$@" --ozone-platform=x11; fi
+fi
+
+# shellcheck disable=SC2086
+exec "$exe" "$@" ${REVERIE_CHROMIUM_FLAGS:-}

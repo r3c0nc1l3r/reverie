@@ -1,0 +1,14 @@
+name: Feature
+description: Propose a change.
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What an agent or user cannot do today.
+    validations: { required: true }
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposal

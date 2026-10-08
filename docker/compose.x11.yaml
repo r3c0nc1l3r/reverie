@@ -1,0 +1,7 @@
+# Headed Chromium on the host X11 server. Allow the user once: xhost +SI:localuser:$(id -un)
+services:
+  reverie:
+    environment:
+      DISPLAY: ${DISPLAY}
+    volumes:
+      - /tmp/.X11-unix:/tmp/.X11-unix

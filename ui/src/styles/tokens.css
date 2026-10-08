@@ -1,0 +1,77 @@
+/* Reverie design tokens. Dark first: the tool runs next to a terminal. */
+@import url("https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&family=Fraunces:opsz,wght@9..144,600&display=swap");
+
+:root {
+  /* Surfaces */
+  --bg: #0b0d14;
+  --surface-1: #11141d;
+  --surface-2: #161a25;
+  --surface-3: #1d2230;
+  --line: #242a39;
+  --line-strong: #323a4e;
+
+  /* Text */
+  --text: #e7e9f0;
+  --text-2: #aab2c8;
+  --text-3: #6f7890;
+
+  /* Brand (from the banner) */
+  --brand-1: #f6d6ff;
+  --brand-2: #9cc4ff;
+  --brand-3: #7ee7c7;
+  --brand-grad: linear-gradient(90deg, var(--brand-1), var(--brand-2) 55%, var(--brand-3));
+
+  /* Verdicts: one meaning each. "Fail" is split so the reason is visible. */
+  --pass: #3fcf8e;
+  --pass-bg: #0f2d22;
+  --app-fail: #ff6b6b;        /* the application did the wrong thing */
+  --app-fail-bg: #3a1417;
+  --harness: #c792ff;         /* the test or tooling went wrong, not the app */
+  --harness-bg: #2a1a40;
+  --blocked: #f5b64a;         /* environment or fixture prevented the test */
+  --blocked-bg: #3b2a0f;
+  --not-run: #6f7890;
+  --not-run-bg: #1b1f2b;
+  --running: #7cb8ff;
+  --running-bg: #10243f;
+  --waiting: #ffd166;         /* waiting for the orchestrator */
+  --waiting-bg: #3a2e0c;
+
+  /* Actors */
+  --laya: #7ee7c7;
+  --pilot: #79e2f2;
+  --orchestrator: #ffd166;
+  --person: #f6d6ff;
+
+  /* Type */
+  --font: "Inter", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --mono: "JetBrains Mono", ui-monospace, "SF Mono", monospace;
+  --display: "Fraunces", Georgia, serif;
+  --fs-xs: 11px;
+  --fs-sm: 12.5px;
+  --fs-md: 14px;
+  --fs-lg: 16px;
+  --fs-xl: 20px;
+  --fs-2xl: 28px;
+
+  /* Space and shape */
+  --s-1: 4px;
+  --s-2: 8px;
+  --s-3: 12px;
+  --s-4: 16px;
+  --s-5: 24px;
+  --s-6: 32px;
+  --r-sm: 6px;
+  --r-md: 10px;
+  --r-lg: 14px;
+  --shadow: 0 10px 30px #0009;
+  --focus: 0 0 0 2px var(--bg), 0 0 0 4px var(--brand-2);
+}
+
+* { box-sizing: border-box; }
+html, body, #storybook-root { background: var(--bg); color: var(--text); }
+body { margin: 0; font: var(--fs-md)/1.5 var(--font); -webkit-font-smoothing: antialiased; }
+button { font: inherit; color: inherit; }
+:focus-visible { outline: none; box-shadow: var(--focus); border-radius: var(--r-sm); }
+code, kbd, .mono { font-family: var(--mono); }
+::selection { background: #9cc4ff44; }

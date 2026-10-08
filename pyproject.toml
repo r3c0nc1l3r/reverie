@@ -1,0 +1,37 @@
+[project]
+name = "reverie"
+version = "0.1.0"
+description = "Spec-driven browser test agent: local Laya clicks, a multimodal pilot, and an orchestrator CLI."
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.12"
+dependencies = [
+    "browser-harness==0.1.13",
+    "httpx[http2]>=0.28,<1",
+    "pillow>=11,<13",
+]
+
+[project.optional-dependencies]
+mlx = ["laya-mlx>=0.1,<0.2"]
+
+[project.scripts]
+reverie = "reverie.control.cli:main"
+laya-agent = "reverie.control.cli:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[dependency-groups]
+dev = ["pytest>=8.4,<9", "ruff>=0.14,<1"]
+
+[tool.ruff]
+line-length = 120
+
+[tool.ruff.lint]
+select = ["E", "F", "I"]
+# Long prompt strings and data tables read better unwrapped; the 120 limit is a guide, not a gate.
+ignore = ["E501"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

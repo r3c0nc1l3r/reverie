@@ -1,0 +1,36 @@
+# Base service: headless Chromium with the Mesa GPU through /dev/dri.
+# Add display, audio, or NVIDIA with override files (see docs/docker.md):
+#   export REVERIE_UID=$(id -u) REVERIE_GID=$(id -g) RENDER_GID=$(stat -c %g /dev/dri/renderD128) VIDEO_GID=$(getent group video | cut -d: -f3)
+#   docker compose -f docker/compose.yaml -f docker/compose.wayland.yaml -f docker/compose.audio.yaml up -d
+#   docker compose -f docker/compose.yaml exec reverie reverie-entrypoint reverie --help
+# The scripts/reverie-docker.sh launcher does the same without compose and detects sockets itself.
+name: reverie
+services:
+  reverie:
+    image: ${REVERIE_IMAGE:-reverie:local}
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+      platforms: [linux/amd64, linux/arm64]
+    container_name: reverie-compose
+    user: "${REVERIE_UID:-1000}:${REVERIE_GID:-1000}"
+    # Host GIDs of /dev/dri/renderD* and the video group; export them as shown above. Without them both fall back
+    # to the image's video group (GID 44, as on Debian and Ubuntu hosts); the render node usually needs RENDER_GID.
+    group_add: ["${RENDER_GID:-video}", "${VIDEO_GID:-44}"]
+    devices: ["/dev/dri:/dev/dri"]
+    network_mode: host            # reach localhost stacks; use "bridge" and published ports otherwise
+    shm_size: 1gb
+    working_dir: ${REVERIE_PROJECT:-.}
+    command: ["sleep-forever"]
+    env_file:
+      - path: ${REVERIE_ENV_FILE:-~/.config/reverie/.env}
+        required: false
+    environment:
+      REVERIE_GPU: ${REVERIE_GPU:-auto}
+      REVERIE_AUDIO: ${REVERIE_AUDIO:-auto}
+      REVERIE_DOWNLOAD_DIR: /downloads
+      HOME: /home/reverie
+    volumes:
+      - ${REVERIE_PROJECT:-.}:${REVERIE_PROJECT:-.}
+      - ${REVERIE_DOCKER_DOWNLOADS:-${REVERIE_PROJECT:-.}/.reverie/downloads}:/downloads
+      - ${REVERIE_ENV_FILE:-~/.config/reverie/.env}:/etc/reverie/.env:ro

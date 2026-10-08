@@ -1,0 +1,62 @@
+---
+title: Contributing
+description: Branches, pull requests, Conventional Commit titles, releases, local checks, and how to work on this documentation site.
+---
+
+import { Content as RepoDoc } from '../../../../../CONTRIBUTING.md';
+
+This page embeds [`CONTRIBUTING.md`](https://github.com/r3c0nc1l3r/reverie/blob/main/CONTRIBUTING.md)
+from the repository, followed by notes on the dashboard UI concepts and the documentation site.
+
+:::tip[Coding agents]
+If you work on Reverie with a coding agent (Claude Code, Codex, Cursor and others), point it at
+[`AGENTS.md`](https://github.com/r3c0nc1l3r/reverie/blob/main/AGENTS.md). It holds the
+architecture, repository map, checks, code rules and git workflow for agents.
+:::
+
+<div class="embedded-md">
+	<RepoDoc />
+</div>
+
+## Dashboard UI concepts
+
+`ui/` holds a Storybook (Vite, React, Tailwind CSS v4 and shadcn/ui) with design concepts for a
+more usable dashboard. Start with the Overview story; the first concept, Run review, is the
+primary view. These are concepts, not the shipped UI. The dashboard that `reverie ui` serves
+lives in `reverie/control/`.
+
+```bash
+cd ui
+npm install
+npm run storybook        # http://localhost:6006
+```
+
+Design rules for the UI (tokens, icons, components and voice) are in
+[`DESIGN.md`](https://github.com/r3c0nc1l3r/reverie/blob/main/DESIGN.md). Icons come only from
+Lucide through `react-icons/lu`, and the UI uses no emoji.
+
+## Working on these docs
+
+The site lives in `website/` and uses [Astro](https://astro.build) with
+[Starlight](https://starlight.astro.build). Pages are Markdown files in
+`website/src/content/docs/`. Search is built in (Pagefind) and is generated at build time.
+
+```bash
+cd website
+npm ci
+npm run dev          # http://localhost:4321/reverie/
+npm run build        # static site in website/dist/
+npm run preview      # serve dist/ under the /reverie base
+npm run check:links  # headless check of every internal link and asset (needs a running preview)
+```
+
+The site is served from the `/reverie` base path, so internal links include it, for example
+`[CLI reference](/reverie/reference/cli/)`. The changelog and this contributing page are read
+from the repository's `CHANGELOG.md` and `CONTRIBUTING.md` at build time; edit those files, not
+copies.
+
+`scripts/publish-docs.sh` builds the site and pushes it to the `gh-pages` branch.
+
+The tests mock every network call. One opt-in test calls the hosted Jev engine for real: `REVERIE_LIVE_JEV=1 uv run pytest tests/test_jev_live.py -s`, or `scripts/jev-smoke.sh [--e2e]`. It needs `OPENROUTER_API_KEY` and spends a little credit.
+
+Use the `docs` type for documentation PR titles, for example `docs: explain checkpoints`.

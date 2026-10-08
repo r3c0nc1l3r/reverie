@@ -1,0 +1,17 @@
+# NVIDIA through the NVIDIA Container Toolkit (documented, not tested on AMD hosts). Needs nvidia-ctk on the host.
+# Drops /dev/dri; the toolkit injects the driver, EGL, and VA/NVDEC libraries.
+services:
+  reverie:
+    devices: !reset []
+    group_add: !reset []
+    environment:
+      REVERIE_GPU: nvidia
+      NVIDIA_DRIVER_CAPABILITIES: all
+      NVIDIA_VISIBLE_DEVICES: all
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu, video, graphics, display, utility, compute]

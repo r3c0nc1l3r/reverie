@@ -1,0 +1,132 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&family=Fraunces:wght@600;700&display=swap');
+
+@import "tailwindcss";
+@config "../tailwind.config.ts";
+@custom-variant dark (&:is(.dark *));
+
+:root {
+  --background: #0b0d14;
+  --foreground: #e7e9f0;
+  --card: #11141d;
+  --card-foreground: #e7e9f0;
+  --primary: #9cc4ff;
+  --primary-foreground: #0b0d14;
+  --secondary: #7ee7c7;
+  --secondary-foreground: #0b0d14;
+  --muted: #161a25;
+  --muted-foreground: #9299b5;
+  --accent: #7ee7c7;
+  --accent-foreground: #0b0d14;
+  --destructive: #ff6b6b;
+  --destructive-foreground: #f5f5f5;
+  --border: #242a39;
+  --input: #1a1f2e;
+  --ring: #7ee7c7;
+  --radius: 0.625rem;
+
+  --verdict-pass: #3fcf8e;
+  --verdict-pass-muted: rgba(63, 207, 142, 0.1);
+  --verdict-app-fail: #ff6b6b;
+  --verdict-app-fail-muted: rgba(255, 107, 107, 0.1);
+  --verdict-harness: #c792ff;
+  --verdict-harness-muted: rgba(199, 146, 255, 0.1);
+  --verdict-blocked: #f5b64a;
+  --verdict-blocked-muted: rgba(245, 182, 74, 0.1);
+  --verdict-not-run: #6f7890;
+  --verdict-not-run-muted: rgba(111, 120, 144, 0.1);
+  --verdict-running: #7cb8ff;
+  --verdict-running-muted: rgba(124, 184, 255, 0.1);
+  --verdict-waiting: #ffd166;
+  --verdict-waiting-muted: rgba(255, 209, 102, 0.1);
+
+  --actor-laya: #7ee7c7;
+  --actor-laya-muted: rgba(126, 231, 199, 0.1);
+  --actor-pilot: #79e2f2;
+  --actor-pilot-muted: rgba(121, 226, 242, 0.1);
+  --actor-orchestrator: #ffd166;
+  --actor-orchestrator-muted: rgba(255, 209, 102, 0.1);
+  --actor-person: #f6d6ff;
+  --actor-person-muted: rgba(246, 214, 255, 0.1);
+}
+
+body {
+  background-color: var(--background);
+  color: var(--foreground);
+  font-family: 'Inter', sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  font-feature-settings: "rlig" 1, "calt" 1;
+}
+
+* {
+  border-color: var(--border);
+}
+
+code, pre, .monospace {
+  font-family: 'JetBrains Mono', monospace;
+}
+
+.brand {
+  font-family: 'Fraunces', serif;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+.tabular-nums {
+  font-feature-settings: 'tnum';
+}
+
+/* Verdict color utilities */
+.bg-verdict-pass { background-color: var(--verdict-pass); }
+.bg-verdict-pass-muted { background-color: var(--verdict-pass-muted); }
+.text-verdict-pass { color: var(--verdict-pass); }
+
+.bg-verdict-app-fail { background-color: var(--verdict-app-fail); }
+.bg-verdict-app-fail-muted { background-color: var(--verdict-app-fail-muted); }
+.text-verdict-app-fail { color: var(--verdict-app-fail); }
+
+.bg-verdict-harness { background-color: var(--verdict-harness); }
+.bg-verdict-harness-muted { background-color: var(--verdict-harness-muted); }
+.text-verdict-harness { color: var(--verdict-harness); }
+
+.bg-verdict-blocked { background-color: var(--verdict-blocked); }
+.bg-verdict-blocked-muted { background-color: var(--verdict-blocked-muted); }
+.text-verdict-blocked { color: var(--verdict-blocked); }
+
+.bg-verdict-not-run { background-color: var(--verdict-not-run); }
+.bg-verdict-not-run-muted { background-color: var(--verdict-not-run-muted); }
+.text-verdict-not-run { color: var(--verdict-not-run); }
+
+.bg-verdict-running { background-color: var(--verdict-running); }
+.bg-verdict-running-muted { background-color: var(--verdict-running-muted); }
+.text-verdict-running { color: var(--verdict-running); }
+
+.bg-verdict-waiting { background-color: var(--verdict-waiting); }
+.bg-verdict-waiting-muted { background-color: var(--verdict-waiting-muted); }
+.text-verdict-waiting { color: var(--verdict-waiting); }
+
+/* Actor color utilities */
+.bg-actor-laya { background-color: var(--actor-laya); }
+.bg-actor-laya-muted { background-color: var(--actor-laya-muted); }
+.text-actor-laya { color: var(--actor-laya); }
+
+.bg-actor-pilot { background-color: var(--actor-pilot); }
+.bg-actor-pilot-muted { background-color: var(--actor-pilot-muted); }
+.text-actor-pilot { color: var(--actor-pilot); }
+
+.bg-actor-orchestrator { background-color: var(--actor-orchestrator); }
+.bg-actor-orchestrator-muted { background-color: var(--actor-orchestrator-muted); }
+.text-actor-orchestrator { color: var(--actor-orchestrator); }
+
+.bg-actor-person { background-color: var(--actor-person); }
+.bg-actor-person-muted { background-color: var(--actor-person-muted); }
+.text-actor-person { color: var(--actor-person); }

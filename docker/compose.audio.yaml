@@ -1,0 +1,7 @@
+# Narration through PulseAudio, or PipeWire's pulse socket.
+services:
+  reverie:
+    environment:
+      PULSE_SERVER: unix:/runtime/pulse/native
+    volumes:
+      - ${XDG_RUNTIME_DIR}/pulse/native:/runtime/pulse/native

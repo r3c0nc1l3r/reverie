@@ -1,0 +1,155 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>reverie watch</title>
+<style>
+  :root { --bg:#0f1115; --panel:#171a21; --line:#262b36; --text:#e6e8ee; --muted:#8b93a7; --amber:#f5b041;
+    --pass:#3fb950; --fail:#f85149; }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--text); font:14px/1.45 system-ui, sans-serif; }
+  header { display:flex; gap:14px; align-items:center; padding:10px 16px; border-bottom:1px solid var(--line); }
+  header h1 { font-size:15px; margin:0; }
+  .pill { padding:2px 10px; border-radius:999px; background:var(--line); color:var(--muted); font-size:12px; }
+  .pill.acting { background:#1f3a5f; color:#9ecbff; } .pill.waiting { background:#4a3510; color:var(--amber); }
+  .url { color:var(--muted); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; flex:1; }
+  main { display:grid; grid-template-columns: minmax(0, 1fr) 380px; gap:12px; padding:12px; }
+  @media (max-width: 1000px) { main { grid-template-columns: 1fr; } }
+  .frame { background:var(--panel); border:1px solid var(--line); border-radius:10px; overflow:hidden; }
+  .frame img { width:100%; display:block; }
+  .caption { padding:10px 14px; border-top:1px solid var(--line); min-height:44px; }
+  .caption b { color:var(--amber); margin-right:8px; }
+  aside { display:flex; flex-direction:column; gap:12px; min-width:0; }
+  section { background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:10px 12px; }
+  section h2 { font-size:12px; text-transform:uppercase; letter-spacing:.06em; color:var(--muted); margin:0 0 8px; }
+  ol { margin:0; padding-left:22px; max-height:340px; overflow:auto; }
+  li { margin:3px 0; word-break:break-word; } li small { color:var(--muted); }
+  .check { display:flex; gap:8px; } .check .ok { color:var(--pass); } .check .no { color:var(--fail); }
+  .prompt { border-color:var(--amber); }
+  .prompt textarea { width:100%; min-height:54px; background:#0b0d11; color:var(--text); border:1px solid var(--line);
+    border-radius:8px; padding:6px; font:inherit; margin:6px 0; }
+  .prompt button { font:inherit; border:0; border-radius:8px; padding:6px 12px; margin-right:6px; cursor:pointer;
+    background:var(--amber); color:#111; } .prompt button + button { background:var(--line); color:var(--text); }
+  .muted { color:var(--muted); }
+  .test-title { font-weight:600; margin-bottom:6px; display:flex; gap:8px; align-items:center; }
+  .steps { list-style:none; padding:0; margin:0; }
+  .steps li { display:grid; grid-template-columns: 22px 1fr; gap:6px; padding:5px 6px; border-radius:6px; margin:2px 0; }
+  .steps li.running { background:#1f3a5f; } .steps li .note { grid-column:2; color:var(--muted); font-size:12px; }
+  .mark { font-weight:700; text-align:center; } .mark.pass { color:var(--pass); } .mark.fail { color:var(--fail); }
+  .mark.blocked { color:var(--amber); } .mark.running { color:#9ecbff; } .mark.pending, .mark.skipped { color:var(--muted); }
+  .result.pass { background:#12361d; color:var(--pass); } .result.fail { background:#3d1413; color:var(--fail); }
+  .result.blocked { background:#4a3510; color:var(--amber); } .result.running { background:#1f3a5f; color:#9ecbff; }
+  .admin { border-color:#a371f7; } .admin code { background:#0b0d11; padding:2px 6px; border-radius:6px; display:block;
+    margin:4px 0; white-space:pre-wrap; word-break:break-all; }
+  .cp { margin:6px 0; } .cp .st { font-weight:700; } .cp .st.pending { color:#d2a8ff; } .cp .st.done { color:var(--pass); }
+  .cp .st.failed { color:var(--fail); } .cp .st.skipped { color:var(--muted); }
+  .layer { font-size:11px; padding:1px 6px; border-radius:999px; margin-right:4px; background:var(--line); }
+  .layer.laya { background:#12361d; color:#7ee787; } .layer.mercury { background:#3b2a5c; color:#d2a8ff; }
+  .layer.agent { background:#4a3510; color:var(--amber); }
+  pre.plan { white-space:pre-wrap; margin:0; font-size:12px; color:var(--muted); max-height:180px; overflow:auto; }
+</style>
+</head>
+<body>
+<header>
+  <h1>reverie · <span id="name"></span></h1>
+  <span id="status" class="pill">…</span>
+  <span id="url" class="url"></span>
+  <span id="steps" class="muted"></span>
+</header>
+<main>
+  <div class="frame">
+    <img id="frame" alt="Live view of the agent's browser tab">
+    <div class="caption"><b>Agent</b><span id="caption" class="muted">Waiting for the first action…</span></div>
+  </div>
+  <aside>
+    <section id="prompt" class="prompt" hidden>
+      <h2>Waiting for you</h2>
+      <div id="question"></div>
+      <textarea id="reply" placeholder="Optional reply"></textarea>
+      <div id="choices"></div>
+    </section>
+    <section id="admin" class="admin" hidden><h2>Orchestrator checkpoints</h2><div id="cps"></div></section>
+    <section id="test" hidden><h2>Test plan</h2><div class="test-title"><span id="test-title"></span>
+      <span id="test-result" class="pill result"></span></div><ol id="test-steps" class="steps"></ol></section>
+    <section id="goal" hidden><h2>Current goal</h2><div id="goal-text"></div>
+      <div id="pending" class="muted"></div><div id="hints" class="muted"></div>
+      <pre id="goal-plan" class="plan" hidden></pre></section>
+    <section><h2>Checks</h2><div id="checks" class="muted">None yet</div></section>
+    <section><h2>Steps <span id="layers" class="muted"></span></h2><ol id="history"></ol></section>
+    <section><h2>Narration</h2><ol id="said"></ol></section>
+  </aside>
+</main>
+<script>
+  const token = "__TOKEN__";
+  const $ = (id) => document.getElementById(id);
+  const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+  let promptId = null, lastFrame = null;
+  async function answer(choice) {
+    await fetch("/", { method: "POST", headers: { "Content-Type": "application/json", "X-Laya-Agent-Token": token },
+      body: JSON.stringify({ command: "reply", args: { choice, text: $("reply").value } }) });
+  }
+  async function tick() {
+    try {
+      const response = await fetch(`/watch/state?token=${encodeURIComponent(token)}`, { cache: "no-store" });
+      const s = await response.json();
+      $("name").textContent = s.name;
+      $("status").textContent = s.status; $("status").className = `pill ${s.status}`;
+      $("url").textContent = s.url || ""; $("url").title = s.title || "";
+      $("steps").textContent = `${s.steps} steps`;
+      if (s.caption) { $("caption").textContent = s.caption; $("caption").className = ""; }
+      if (s.frame && s.frame !== lastFrame) { $("frame").src = `data:image/jpeg;base64,${s.frame}`; lastFrame = s.frame; }
+      $("history").innerHTML = s.history.map((h) =>
+        `<li><span class="layer ${esc(h.by)}">${esc(h.by)}</span><small>${esc(h.kind)}</small> ${esc(h.label)} ` +
+        `${h.text ? `<small>“${esc(h.text)}”</small>` : ""}${h.escalation ? ` <small>(escalated: ${esc(h.escalation)})</small>` : ""}</li>`).join("");
+      $("layers").textContent = s.layers ? Object.entries(s.layers).map(([k, v]) => `${k} ${v}`).join(" · ") : "";
+      $("admin").hidden = !(s.checkpoints && s.checkpoints.length);
+      if (s.checkpoints) $("cps").innerHTML = s.checkpoints.slice().reverse().map((c) =>
+        `<div class="cp"><span class="st ${c.status}">${c.status === "pending" ? "WAITING FOR ORCHESTRATOR" : c.status.toUpperCase()}</span> ` +
+        `${esc(c.title)} <small class="muted">(${esc(c.source)})</small>` +
+        (c.command ? `<code>$ ${esc(c.command)}</code>` : "") +
+        (c.result ? `<small class="muted">exit ${esc(c.result.exit_code)} ${esc(c.result.note)}</small>` +
+          (c.result.output ? `<code>${esc(c.result.output.slice(-400))}</code>` : "") : "") + "</div>").join("");
+      $("history").scrollTop = $("history").scrollHeight;
+      $("said").innerHTML = s.said.map((t) => `<li>${esc(t)}</li>`).join("");
+      $("said").scrollTop = $("said").scrollHeight;
+      $("checks").innerHTML = s.checks.length ? s.checks.map((c) => c.results.map((r) =>
+        `<div class="check"><span class="${r.pass ? "ok" : "no"}">${r.pass ? "PASS" : "FAIL"}</span>${esc(r.check)}</div>`).join("")).join("")
+        : "None yet";
+      const marks = { pending: "○", running: "▶", pass: "✓", fail: "✗", blocked: "!", skipped: "–" };
+      $("test").hidden = !s.test;
+      if (s.test) {
+        $("test-title").textContent = s.test.title;
+        $("test-result").textContent = s.test.result; $("test-result").className = `pill result ${s.test.result}`;
+        $("test-steps").innerHTML = s.test.steps.map((t) =>
+          `<li class="${t.status}"><span class="mark ${t.status}">${marks[t.status]}</span><span>${esc(t.title)}</span>` +
+          (t.note ? `<span class="note">${esc(t.note)}</span>` : "") + "</li>").join("");
+      }
+      $("goal").hidden = !s.goal;
+      if (s.goal) {
+        $("goal-text").textContent = s.goal;
+        $("goal-plan").hidden = !s.goal_plan;
+        if (s.goal_plan) $("goal-plan").textContent = JSON.stringify(s.goal_plan, null, 2);
+        const q = s.pending;
+        $("pending").innerHTML = q ? `Proposed by <b>${esc(q.layer || q.engine)}</b>${q.escalation ? ` (escalated: ${esc(q.escalation)})` : ""} (${Math.round(q.confidence * 100)}%, ${q.latency_ms} ms): ` +
+          `${esc(q.label)}${q.reason ? ` — <i>${esc(q.reason)}</i>` : ""}` : "";
+        $("hints").textContent = s.hints && s.hints.length ? `Steering: ${s.hints.join(" · ")}` : "";
+      }
+      const p = s.prompt;
+      $("prompt").hidden = !p;
+      if (p && p.id !== promptId) {
+        promptId = p.id; $("question").textContent = p.question; $("reply").value = "";
+        $("reply").hidden = !p.allow_text;
+        $("choices").innerHTML = "";
+        (p.choices.length ? p.choices : ["Continue"]).forEach((c) => {
+          const b = document.createElement("button"); b.textContent = c; b.onclick = () => answer(c); $("choices").appendChild(b);
+        });
+      }
+      if (!p) promptId = null;
+    } catch { $("status").textContent = "disconnected"; }
+    setTimeout(tick, 600);
+  }
+  tick();
+</script>
+</body>
+</html>

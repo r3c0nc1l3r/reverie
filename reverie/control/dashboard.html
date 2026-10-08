@@ -1,0 +1,282 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>reverie runs</title>
+<style>
+  :root { --bg:#0f1115; --panel:#171a21; --panel2:#1d2129; --line:#262b36; --text:#e6e8ee; --muted:#8b93a7;
+    --amber:#f5b041; --pass:#3fb950; --fail:#f85149; --blue:#9ecbff; --violet:#d2a8ff; --green:#7ee787; }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--text); font:14px/1.45 system-ui, sans-serif; height:100vh;
+    display:grid; grid-template-rows:auto 1fr; }
+  header { display:flex; gap:12px; align-items:center; padding:8px 14px; border-bottom:1px solid var(--line); }
+  header h1 { font-size:15px; margin:0; } .muted { color:var(--muted); } small { color:var(--muted); }
+  .pill { padding:1px 9px; border-radius:999px; background:var(--line); color:var(--muted); font-size:12px; white-space:nowrap; }
+  .pass { color:var(--pass); } .fail { color:var(--fail); } .blocked, .incomplete { color:var(--amber); }
+  .pill.pass { background:#12361d; } .pill.fail { background:#3d1413; } .pill.blocked, .pill.incomplete { background:#4a3510; }
+  .pill.running { background:#1f3a5f; color:var(--blue); } .pill.live { background:#3d1413; color:#ffa198; }
+  .layout { display:grid; grid-template-columns:290px minmax(0,1fr) 400px; min-height:0; }
+  @media (max-width:1200px) { .layout { grid-template-columns:240px minmax(0,1fr); } .right { grid-column:1 / -1; } }
+  nav { border-right:1px solid var(--line); overflow:auto; padding:8px; }
+  nav h2 { font-size:11px; text-transform:uppercase; letter-spacing:.06em; color:var(--muted); margin:12px 6px 4px; }
+  .test { border-radius:8px; margin:2px 0; }
+  .test > button, .run { all:unset; display:flex; gap:8px; align-items:center; width:100%; padding:6px 8px;
+    border-radius:8px; cursor:pointer; box-sizing:border-box; }
+  .test > button:hover, .run:hover { background:var(--panel2); }
+  .test .name { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .runs { margin:0 0 4px 22px; } .run { font-size:12.5px; padding:4px 8px; }
+  .run.sel, .test.sel > button { background:#1f3a5f; }
+  .dot { width:9px; height:9px; border-radius:50%; flex:none; background:var(--muted); }
+  .dot.pass { background:var(--pass); } .dot.fail { background:var(--fail); } .dot.blocked, .dot.incomplete { background:var(--amber); }
+  .dot.running { background:var(--blue); } .dot.live { box-shadow:0 0 0 3px #f8514955; animation:pulse 1.4s infinite; }
+  @keyframes pulse { 50% { box-shadow:0 0 0 6px #f8514900; } }
+  .center { padding:12px; overflow:auto; min-width:0; }
+  .frame { background:var(--panel); border:1px solid var(--line); border-radius:10px; overflow:hidden; }
+  .frame img { width:100%; display:block; min-height:120px; background:#000; }
+  .bar { display:flex; gap:8px; align-items:center; padding:8px 12px; border-top:1px solid var(--line); }
+  .bar b { color:var(--amber); } #caption { flex:1; }
+  .tabs { display:flex; gap:6px; padding:8px 10px; border-bottom:1px solid var(--line); overflow:auto; }
+  .tab { padding:3px 10px; border-radius:6px; background:var(--panel2); font-size:12px; white-space:nowrap; max-width:260px;
+    overflow:hidden; text-overflow:ellipsis; color:var(--muted); } .tab.current { background:#1f3a5f; color:var(--blue); }
+  button.ghost { font:inherit; background:var(--line); color:var(--text); border:0; border-radius:6px; padding:3px 10px; cursor:pointer; }
+  .right { border-left:1px solid var(--line); overflow:auto; padding:10px; display:flex; flex-direction:column; gap:10px; }
+  section { background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:10px 12px; }
+  section h3 { font-size:11px; text-transform:uppercase; letter-spacing:.06em; color:var(--muted); margin:0 0 8px; }
+  .steps { list-style:none; padding:0; margin:0; }
+  .steps li { display:grid; grid-template-columns:20px 1fr; gap:6px; padding:4px 6px; border-radius:6px; }
+  .steps li.running { background:#1f3a5f; } .steps .note { grid-column:2; color:var(--muted); font-size:12px; }
+  .mark { font-weight:700; text-align:center; }
+  .timeline { list-style:none; padding:0; margin:0; }
+  .timeline li { padding:5px 6px; border-radius:6px; cursor:default; word-break:break-word; font-size:13px; }
+  .timeline li.has-frame { cursor:pointer; } .timeline li.has-frame:hover { background:var(--panel2); }
+  .timeline li.sel { background:#1f3a5f; } .timeline li.setup { opacity:.65; }
+  .layer { font-size:11px; padding:1px 6px; border-radius:999px; margin-right:4px; background:var(--line); }
+  .layer.laya { background:#12361d; color:var(--green); } .layer.mercury { background:#3b2a5c; color:var(--violet); }
+  .layer.orchestrator { background:#4a3510; color:var(--amber); } .layer.pilot { background:#0f3b44; color:#79e2f2; }
+  .ev { font-size:11px; text-transform:uppercase; color:var(--muted); margin-right:4px; }
+  .recap { color:var(--text); font-style:italic; } .cam { color:var(--muted); font-size:11px; }
+  .prompt { border-color:var(--amber); } .prompt textarea { width:100%; background:#0b0d11; color:var(--text);
+    border:1px solid var(--line); border-radius:8px; padding:6px; font:inherit; margin:6px 0; }
+  .prompt button { font:inherit; border:0; border-radius:8px; padding:5px 12px; margin-right:6px; cursor:pointer;
+    background:var(--amber); color:#111; }
+  .empty { padding:40px; text-align:center; color:var(--muted); }
+  code { background:#0b0d11; padding:1px 5px; border-radius:5px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>reverie · runs</h1>
+  <span id="totals" class="muted"></span>
+  <span style="flex:1"></span>
+  <button id="narr" class="ghost"></button>
+  <span class="muted">↑/↓ or ←/→ step through frames (narration plays) · L back to live · N narration</span>
+</header>
+<div class="layout">
+  <nav id="nav"><div class="empty">Loading runs…</div></nav>
+  <div class="center">
+    <div id="head" style="display:flex;gap:10px;align-items:center;margin-bottom:8px"></div>
+    <div class="frame">
+      <div id="tabs" class="tabs" hidden></div>
+      <img id="frame" alt="Browser view for the selected step">
+      <div class="bar"><b id="who">Agent</b><span id="caption" class="muted">Pick a run on the left.</span>
+        <button id="live-btn" class="ghost" hidden>Back to live</button></div>
+    </div>
+    <section id="goal" style="margin-top:10px" hidden><h3>Current goal</h3><div id="goal-text"></div>
+      <div id="pending" class="muted"></div><div id="hints" class="muted"></div></section>
+  </div>
+  <div class="right">
+    <section id="prompt" class="prompt" hidden><h3>Waiting for you</h3><div id="question"></div>
+      <textarea id="reply" placeholder="Optional reply"></textarea><div id="choices"></div></section>
+    <section id="plan" hidden><h3>Test plan <span id="layers" class="muted"></span></h3><ol id="steps" class="steps"></ol></section>
+    <section><h3>Timeline</h3><ol id="timeline" class="timeline"><li class="muted">No run selected</li></ol></section>
+  </div>
+</div>
+<script>
+// Narration playback: the spoken lines recorded with a frame play when you land on it.
+const narration = (() => {
+  const bluetooth = __BLUETOOTH__;  // Bluetooth audio mode: wake sleeping headphones before speech.
+  let on = true, current = null, token = 0, lastEnd = 0, ctx = null;
+  try { on = localStorage.getItem("laya-narration") !== "off"; } catch {}
+  async function wake() {
+    if (!bluetooth || performance.now() - lastEnd < 4000) return;
+    ctx = ctx || new AudioContext();
+    const buffer = ctx.createBuffer(1, Math.round(ctx.sampleRate * 1.2), ctx.sampleRate);
+    const data = buffer.getChannelData(0);
+    for (let i = 0; i < data.length; i++) data[i] = (Math.random() - 0.5) * 0.001;  // about -66 dBFS
+    const src = ctx.createBufferSource(); src.buffer = buffer; src.connect(ctx.destination);
+    await new Promise((done) => { src.onended = done; src.start(); });
+  }
+  function stop() { token++; if (current) { current.pause(); current = null; } }
+  async function play(lines) {
+    stop();
+    if (!on || !lines || !lines.length) return;
+    const mine = token;
+    await wake();
+    for (const line of lines) {
+      if (mine !== token) return;
+      current = new Audio(`/api/speech?text=${encodeURIComponent(line)}`);
+      try { await current.play(); await new Promise((done) => { current.onended = done; current.onerror = done; }); }
+      catch { return; }
+      lastEnd = performance.now();
+    }
+  }
+  function toggle() { on = !on; try { localStorage.setItem("laya-narration", on ? "on" : "off"); } catch {} if (!on) stop(); return on; }
+  return { play, stop, toggle, get on() { return on; } };
+})();
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+const api = (path) => fetch(path, {cache:"no-store"}).then((r) => r.json());
+const marks = { pending:"○", running:"▶", pass:"✓", fail:"✗", blocked:"!", skipped:"–" };
+const who = { laya:"Laya", mercury:"Mercury", pilot:"Pilot", orchestrator:"Claude", jev:"Jev" };
+const time = (t) => (t || "").slice(11, 16);
+let data = null, selected = null, run = null, open = new Set(), pinned = null, events = [], promptId = null;
+
+try { const saved = JSON.parse(localStorage.getItem("laya-dash") || "{}"); selected = saved.run || null;
+  (saved.open || []).forEach((k) => open.add(k)); } catch {}
+const save = () => { try { localStorage.setItem("laya-dash", JSON.stringify({run:selected, open:[...open]})); } catch {} };
+
+function renderNav() {
+  const all = data.suites.flatMap((s) => s.tests);
+  const count = (r) => all.filter((t) => t.result === r).length;
+  $("totals").textContent = `${all.length} tests · ${count("pass")} pass · ${count("fail")} fail · ` +
+    `${count("blocked") + count("incomplete")} blocked/incomplete · ${data.live.length} live session${data.live.length === 1 ? "" : "s"}`;
+  $("nav").innerHTML = data.suites.length ? data.suites.map((s) => `<h2>${esc(s.name)}</h2>` + s.tests.map((t) => {
+    const key = `${s.name}::${t.title}`, isOpen = open.has(key) || t.runs.some((r) => r.id === selected);
+    return `<div class="test ${t.runs.some((r) => r.id === selected) ? "sel" : ""}">
+      <button data-key="${esc(key)}" data-first="${esc(t.runs[0].id)}"><span class="dot ${t.result} ${t.live ? "live" : ""}"></span>
+      <span class="name" title="${esc(t.title)}">${esc(t.title)}</span><small>${t.runs.length > 1 ? `${t.runs.length} runs` : ""}</small></button>
+      ${isOpen ? `<div class="runs">${t.runs.map((r) => `<button class="run ${r.id === selected ? "sel" : ""}" data-run="${esc(r.id)}">
+        <span class="dot ${r.result} ${r.live ? "live" : ""}"></span><span style="flex:1">${esc(r.session)} · ${time(r.started)}</span>
+        <small>${r.done}/${r.total}</small>${r.live ? '<span class="pill live">live</span>' : ""}</button>`).join("")}</div>` : ""}</div>`;
+  }).join("")).join("") : '<div class="empty">No runs yet. Load a plan in a session.</div>';
+  document.querySelectorAll(".test > button").forEach((b) => b.onclick = () => {
+    const key = b.dataset.key; open.has(key) ? open.delete(key) : open.add(key); select(b.dataset.first); });
+  document.querySelectorAll(".run").forEach((b) => b.onclick = (e) => { e.stopPropagation(); select(b.dataset.run); });
+}
+
+function select(id) { selected = id; pinned = null; save(); renderNav(); loadRun(); }
+
+function frameUrl(file) { return `/api/frame?dir=${encodeURIComponent(run.dir)}&file=${encodeURIComponent(file)}`; }
+
+function describe(e) {
+  const t = e.type;
+  if (t === "act") return `<span class="layer ${esc(e.by)}">${esc(who[e.by] || e.by)}</span><small>${esc(e.kind)}</small> ${esc(e.label)}` +
+    (e.text ? ` <small>“${esc(e.text)}”</small>` : "") + (e.escalation ? ` <small>(escalated: ${esc(e.escalation)})</small>` : "");
+  if (t === "check") return `<span class="ev">check</span>` + (e.results || []).map((r) =>
+    `<span class="${r.pass ? "pass" : "fail"}">${r.pass ? "PASS" : "FAIL"}</span> ${esc(r.check)}`).join("; ");
+  if (t === "mark") return `<span class="ev">step ${e.step}</span><span class="${esc(e.status)}">${esc(e.status)}</span>${e.note ? ` — ${esc(e.note)}` : ""}`;
+  if (t === "finding") return `<span class="ev fail">finding ${esc(e.severity)}</span>${esc(e.what)}` +
+    (e.expected ? ` <small>expected: ${esc(e.expected)}</small>` : "") + (e.workaround ? ` <small>workaround: ${esc(e.workaround)}</small>` : "");
+  if (t === "ui_flag") return `<span class="ev blocked">UI flag</span>${esc(e.what)}`;
+  if (t === "ui_review") return `<span class="ev">UI review</span>` + ((e.issues || []).length
+    ? (e.issues || []).map((i) => `<span class="${i.severity === "high" ? "fail" : "blocked"}">${esc(i.severity)}</span> ${esc(i.what)}`).join("; ")
+    : `<span class="pass">no problems</span> ${esc(e.summary)}`);
+  if (t === "recap") return `<span class="ev">recap</span><span class="recap">${esc(e.summary)}</span>`;
+  if (t === "say") return `<span class="ev">said</span>${esc(e.text)}`;
+  if (t === "goal") return `<span class="ev">goal</span>${esc(e.goal)}`;
+  if (t === "hint") return `<span class="ev">hint</span>${esc(e.hint)}`;
+  if (t === "auto") return `<span class="ev">stack paused</span>${esc(e.reason)} <small>${esc(Object.entries(e.layers || {}).filter(([, v]) => v).map(([k, v]) => `${who[k] || k} ${v}`).join(" · "))}</small>`;
+  if (t === "dialog") return `<span class="ev">${esc(e.type_ || "dialog")}</span>${esc(e.message || (e.accept ? "accepted" : "dismissed"))}`;
+  if (t === "checkpoint") return `<span class="ev">admin</span>${esc(e.title)}${e.command ? ` <code>${esc(e.command)}</code>` : ""}`;
+  if (t === "resolve") return `<span class="ev">admin ${esc(e.status)}</span>${esc(e.note)}`;
+  if (["goto", "open_tab", "switch", "follow_tab", "close_tab"].includes(t))
+    return `<span class="ev">${t.replace("_", " ")}</span>${esc(e.url || e.target || "")}${e.isolated ? " <small>(signed-out tab)</small>" : ""}`;
+  if (t === "error") return `<span class="ev fail">error</span>${esc(e.error)}`;
+  return `<span class="ev">${esc(t)}</span>`;
+}
+
+function show(i) {
+  const e = events[i]; if (!e) return;
+  const file = e.frame; if (!file) return;
+  if (pinned !== i) narration.play(e.speech);
+  pinned = i; $("frame").src = frameUrl(file);
+  $("who").textContent = e.type === "act" ? (who[e.by] || e.by) : e.type;
+  $("caption").innerHTML = describe(e); $("caption").className = "";
+  $("live-btn").hidden = !run.live;
+  document.querySelectorAll("#timeline li").forEach((li) => li.classList.toggle("sel", Number(li.dataset.i) === i));
+  document.querySelector(`#timeline li[data-i="${i}"]`)?.scrollIntoView({block:"nearest"});
+}
+
+function renderRun() {
+  if (!run) return;
+  const layers = Object.entries(run.layers || {}).map(([k, v]) => `${who[k] || k} ${v}`).join(" · ");
+  $("head").innerHTML = `<b>${esc(run.title)}</b><span class="pill ${run.result}">${run.result}</span>` +
+    (run.live ? '<span class="pill live">live</span>' : "") + `<small>${esc(run.session)} · ${esc(run.started.replace("T", " "))}` +
+    `${run.ended && run.ended !== run.started ? ` → ${time(run.ended)}` : ""}</small>` +
+    `<a class="pill" href="/replay?run=${encodeURIComponent(run.id)}" target="_blank">▶ Replay run</a>` +
+    `<a class="pill" href="/replay?suite=${encodeURIComponent(run.suite)}" target="_blank">▶ Replay suite</a>`;
+  $("plan").hidden = !run.steps.length; $("layers").textContent = layers ? `· ${layers}` : "";
+  $("steps").innerHTML = run.steps.map((s) => `<li class="${s.status}"><span class="mark ${s.status}">${marks[s.status] || "○"}</span>` +
+    `<span>${s.admin ? "<small>[admin]</small> " : ""}${esc(s.title)}</span>${s.note ? `<span class="note">${esc(s.note)}</span>` : ""}` +
+    `${(s.findings || []).map((f) => `<span class="note fail">FINDING ${esc(f.severity)} — ${esc(f.what)}${f.workaround ? ` (workaround: ${esc(f.workaround)})` : ""}</span>`).join("")}` +
+    `${s.ui && s.ui.issues && s.ui.issues.length ? `<span class="note blocked">UI: ${s.ui.issues.map((i) => `${esc(i.severity)} — ${esc(i.what)}`).join("; ")}</span>` : ""}</li>`).join("");
+  events = run.events.filter((e) => e.type !== "say" || e.phase !== "setup");
+  $("timeline").innerHTML = events.map((e, i) => `<li data-i="${i}" class="${e.frame ? "has-frame" : ""} ${e.phase || ""}">` +
+    `<small>${time(e.t)}</small> ${describe(e)} ${e.frame ? '<span class="cam">▣</span>' : ""}${e.speech ? '<span class="cam"> 🔊</span>' : ""}</li>`).join("") || '<li class="muted">Nothing recorded yet</li>';
+  document.querySelectorAll("#timeline li.has-frame").forEach((li) => li.onclick = () => show(Number(li.dataset.i)));
+  const now = run.live ? run.now : null;
+  $("tabs").hidden = !(now && now.tabs && now.tabs.length > 1);
+  if (now && now.tabs) $("tabs").innerHTML = now.tabs.map((t) => `<span class="tab ${t.current ? "current" : ""}" title="${esc(t.url)}">${esc(t.title || t.url)}</span>`).join("");
+  $("goal").hidden = !(now && now.goal);
+  if (now && now.goal) {
+    $("goal-text").textContent = now.goal;
+    const q = now.pending;
+    $("pending").innerHTML = q ? `Proposed by <b>${esc(who[q.layer] || q.layer)}</b> (${Math.round(q.confidence * 100)}%): ${esc(q.label)}` : "";
+    $("hints").textContent = now.hints && now.hints.length ? `Steering: ${now.hints.join(" · ")}` : "";
+  }
+  const p = now && now.prompt; $("prompt").hidden = !p;
+  if (p && p.id !== promptId) {
+    promptId = p.id; $("question").textContent = p.question; $("reply").value = ""; $("choices").innerHTML = "";
+    (p.choices.length ? p.choices : ["Continue"]).forEach((c) => { const b = document.createElement("button"); b.textContent = c;
+      b.onclick = () => fetch("/api/reply", {method:"POST", headers:{"Content-Type":"application/json"},
+        body: JSON.stringify({dir: run.dir, choice: c, text: $("reply").value})}); $("choices").appendChild(b); });
+  }
+  if (!p) promptId = null;
+  if (pinned !== null) return show(pinned);
+  if (run.live && now) {
+    if (now.frame) $("frame").src = `data:image/jpeg;base64,${now.frame}`;
+    $("who").textContent = "Live"; $("caption").textContent = now.caption || ""; $("caption").className = ""; $("live-btn").hidden = true;
+  } else {
+    const last = events.map((e, i) => [e, i]).filter(([e]) => e.frame).pop();
+    $("live-btn").hidden = true;
+    if (last) show(last[1]); else {
+      $("frame").removeAttribute("src"); $("who").textContent = "Recorded";
+      $("caption").textContent = "This run finished before frame saving existed (about 02:10), so it has no frames. Rerun it to get a replay.";
+    }
+  }
+}
+
+async function loadRun() {
+  if (!selected) return;
+  const wanted = selected;
+  try {
+    const fresh = await api(`/api/run?id=${encodeURIComponent(wanted)}`);
+    if (wanted !== selected) return;  // A slower answer for a previous selection must not overwrite this one.
+    if (fresh.error) { run = null; return; }
+    run = fresh; renderRun();
+  } catch {}
+}
+
+async function refresh() {
+  try { data = await api("/api/index");
+    if (!selected) { const live = data.suites.flatMap((s) => s.tests).flatMap((t) => t.runs).find((r) => r.live); if (live) selected = live.id; }
+    renderNav(); await loadRun(); } catch { $("totals").textContent = "dashboard disconnected"; }
+}
+$("live-btn").onclick = () => { pinned = null; narration.stop(); renderRun(); };
+$("narr").textContent = narration.on ? "🔊 Narration on" : "🔇 Narration off";
+$("narr").onclick = () => { $("narr").textContent = narration.toggle() ? "🔊 Narration on" : "🔇 Narration off"; };
+document.addEventListener("keydown", (e) => {
+  if (e.target.tagName === "TEXTAREA") return;
+  const framed = events.map((ev, i) => ev.frame ? i : -1).filter((i) => i >= 0);
+  if (!framed.length) return;
+  const at = pinned === null ? framed.length : framed.indexOf(pinned);
+  if (e.key === "n" || e.key === "N") { $("narr").textContent = narration.toggle() ? "🔊 Narration on" : "🔇 Narration off"; return; }
+  if (e.key === "ArrowDown" || e.key === "ArrowRight" || e.key === "j") { e.preventDefault(); show(framed[Math.min(framed.length - 1, at + 1)]); }
+  if (e.key === "ArrowUp" || e.key === "ArrowLeft" || e.key === "k") { e.preventDefault(); show(framed[Math.max(0, at - 1)]); }
+  if (e.key === "l" || e.key === "L") { pinned = null; narration.stop(); renderRun(); }
+});
+refresh(); setInterval(() => (run && run.live ? loadRun() : null), 900); setInterval(refresh, 5000);
+</script>
+</body>
+</html>

@@ -1,0 +1,4 @@
+/* Pages that embed a repository Markdown file already have a Starlight title. */
+.embedded-md > h1:first-child {
+	display: none;
+}

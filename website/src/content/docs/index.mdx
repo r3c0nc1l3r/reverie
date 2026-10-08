@@ -1,0 +1,70 @@
+---
+title: Reverie
+description: Spec-driven browser tests. A local model makes each click, a multimodal pilot runs the spec, and you drive it all from a terminal CLI.
+template: splash
+hero:
+  tagline: Run browser tests from Markdown specs. A local model makes each click, a multimodal pilot runs the spec step by step, and you control everything from the terminal.
+  image:
+    file: ../../assets/logo.svg
+  actions:
+    - text: Get started
+      link: /reverie/start/installation/
+      icon: right-arrow
+    - text: Concepts
+      link: /reverie/start/concepts/
+      variant: minimal
+    - text: View on GitHub
+      link: https://github.com/r3c0nc1l3r/reverie
+      icon: external
+      variant: minimal
+---
+
+import { Card, CardGrid } from '@astrojs/starlight/components';
+
+![Starting a spec run and reading its progress from the terminal](../../assets/cli.png)
+
+## How it works
+
+<CardGrid>
+	<Card title="Laya (local)" icon="laptop">
+		A small local model served by laya.cpp makes each click and keystroke from the elements it
+		observes on the page.
+	</Card>
+	<Card title="Pilot (multimodal)" icon="rocket">
+		A multimodal model runs the spec: it sends intents, checks results, marks steps, records
+		findings, reviews screenshots, and speaks short progress updates.
+	</Card>
+	<Card title="Orchestrator (you or an agent)" icon="seti:shell">
+		Starts sessions and specs, signs in, handles checkpoints such as database or mail proof, and
+		reviews the verdicts.
+	</Card>
+	<Card title="Guards" icon="approve-check">
+		Commit buttons such as Save or Delete need an explicit intent, only stated values are typed,
+		and loops or stalls end in a checkpoint. Tokens and codes are masked.
+	</Card>
+</CardGrid>
+
+## Try it
+
+```bash
+uv run reverie --session demo start --url https://the-internet.herokuapp.com/
+uv run reverie --session demo spec examples/specs/demo-controls.md
+uv run reverie --session demo pilot
+uv run reverie ui      # dashboard at http://127.0.0.1:7788/
+```
+
+See [Your first run](/reverie/start/first-run/) for the full walkthrough.
+
+## Review every run
+
+The dashboard shows suites, tests and runs, the frame for each event, and the event timeline.
+Replays turn a run into slides with step verdicts and the pilot's narration.
+
+![Run dashboard with the timeline and a frame](../../assets/dashboard.png)
+
+## Credits
+
+Reverie is the agent operation mode of [laya-ultrafast](https://github.com/Command-Perception/laya-ultrafast)
+as its own project. The browser agent, DOM snapshot and executor come from
+[ipenywis/laya-ultrafast](https://github.com/ipenywis/laya-ultrafast) and
+[Browser Use's jev-ultrafast](https://github.com/browser-use/jev-ultrafast) (MIT). Reverie is MIT licensed.
