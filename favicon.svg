@@ -1,0 +1,23 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256">
+  <defs>
+    <linearGradient id="sky" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#1b1f3b"/><stop offset="1" stop-color="#0b0e1a"/>
+    </linearGradient>
+    <linearGradient id="moon" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#f6d6ff"/><stop offset="1" stop-color="#8fb8ff"/>
+    </linearGradient>
+  </defs>
+  <rect width="256" height="256" rx="56" fill="url(#sky)"/>
+  <!-- crescent -->
+  <path d="M150 52a78 78 0 1 0 62 126a64 64 0 1 1-62-126z" fill="url(#moon)"/>
+  <!-- cursor path of steps -->
+  <g fill="none" stroke="#7ee7c7" stroke-width="6" stroke-linecap="round" stroke-dasharray="2 14">
+    <path d="M56 196 C 92 176, 104 150, 132 142"/>
+  </g>
+  <circle cx="56" cy="196" r="9" fill="#7ee7c7"/>
+  <circle cx="132" cy="142" r="9" fill="#7ee7c7"/>
+  <!-- pointer -->
+  <path d="M150 128 l0 58 l14 -14 l12 26 l12 -6 l-12 -25 l20 0 z" fill="#ffffff" stroke="#0b0e1a" stroke-width="4" stroke-linejoin="round"/>
+  <!-- stars -->
+  <circle cx="62" cy="62" r="4" fill="#cfd8ff"/><circle cx="92" cy="40" r="2.5" fill="#cfd8ff"/><circle cx="206" cy="58" r="3" fill="#cfd8ff"/>
+</svg>
