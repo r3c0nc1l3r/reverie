@@ -39,6 +39,7 @@ export default defineConfig({
 						{ slug: 'guides/examples' },
 						{ slug: 'guides/fieldops-demo' },
 						{ slug: 'guides/widgetlab-demo' },
+						{ slug: 'guides/agent-skills' },
 					],
 				},
 				{
