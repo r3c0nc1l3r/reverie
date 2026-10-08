@@ -37,6 +37,7 @@ as a user-facing UI.
 | `DESIGN.md` | The visual design system. Read it before any UI change. |
 | `examples/specs/` | `demo-controls.md` (DEMO-01) against the-internet.herokuapp.com. |
 | `examples/fieldops/` | FieldOps demo app (`run.sh`, port 8765) with specs FS-01..FS-05 and fixtures. |
+| `skills/` | Installable agent skills (`skills/<name>/SKILL.md`, for the skills CLI). `tests/test_skills.py` checks their front matter. Keep them generic: demo apps only. |
 | `examples/widgetlab/` | WidgetLab practice app (`run.sh`, port 8766): wizard, dialogs, late content, download, tabs, type-ahead; specs WL-01..WL-05. |
 | `scripts/agent-services.sh` | Starts laya.cpp and local TTS (`start`, `stop`, `status`). |
 | `docker/`, `scripts/reverie-docker.sh` | The GPU container image, its compose files, and the launcher. See `docs/docker.md`. |

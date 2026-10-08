@@ -945,3 +945,11 @@ def test_commit_words_cover_cancel_with_any_object_and_keep_the_old_matches():
     assert commit_word("Delete Login") == "delete" and commit_word("Save changes") == "save"
     assert commit_word("Edit Details") == "edit details" and commit_word("Place Order") == "place order"
     assert commit_word("Dispatch") is None and commit_word("Work Order") is None
+
+
+def test_the_check_command_passes_link_and_href_to_the_session():
+    from reverie.control.server import COMMANDS
+
+    session = Mock()
+    COMMANDS["check"](session, {"link": "Confirm", "href": "token="})
+    session.check.assert_called_once_with(None, None, None, "Confirm", "token=")

@@ -185,6 +185,23 @@ uv run reverie --session demo pilot
 uv run reverie ui
 ```
 
+## Agent skills
+
+Reverie ships skills that teach AI coding agents (Claude Code, Codex, Cursor, and others) to test web apps with it. Install them with the [skills CLI](https://github.com/vercel-labs/skills):
+
+```bash
+npx skills add r3c0nc1l3r/reverie      # or: bunx skills add r3c0nc1l3r/reverie
+```
+
+| Skill | Use it to |
+|---|---|
+| `reverie-browser-testing` | Install and configure Reverie, run a spec, and read the verdict. |
+| `reverie-test-specs` | Write and fix test specs: steps, stated values, `[admin]` checkpoints, walkthroughs. |
+| `reverie-orchestrator` | Drive sessions from an agent: the pilot loop, checkpoints, sign-in, direct actions. |
+| `reverie-run-review` | Review and debug runs: dashboard, replay, the trail, common failures. |
+
+The skills live in [`skills/`](skills/). See the [docs](https://r3c0nc1l3r.github.io/reverie/guides/agent-skills/).
+
 ## Specs
 
 A spec is one Markdown file with front matter (`id`, `app`, `session`, `role`) and the sections Goal, Fixtures, Steps, Walkthrough, Evidence, Guidance, and Cleanup. Steps become the plan. A step that starts with `[admin]` becomes a checkpoint for the orchestrator. `walkthrough <run> --write <spec>` turns a passing run into click-by-click steps.

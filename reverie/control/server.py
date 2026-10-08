@@ -63,7 +63,7 @@ COMMANDS = {
     "do": lambda s, a: s.do(a["intent"], a.get("hints") or [], a.get("max_steps", 6), a.get("until_text"),
                             a.get("until_url"), a.get("min_confidence", 0.55)),
     "switch": lambda s, a: s.switch(a.get("target")),
-    "check": lambda s, a: s.check(a.get("text"), a.get("absent"), a.get("url")),
+    "check": lambda s, a: s.check(a.get("text"), a.get("absent"), a.get("url"), a.get("link"), a.get("href")),
     "say": lambda s, a: (s.say(a["text"], wait=a.get("wait", False)), s.summary())[1],
     "ask": lambda s, a: s.ask(a["question"], a.get("choices"), a.get("allow_text", True), a.get("timeout", 900)),
     "reply": lambda s, a: s.reply(a.get("choice", "Continue"), a.get("text", "")),
