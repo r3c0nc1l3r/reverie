@@ -20,7 +20,7 @@ reverie init
 | `.reverie/runs/<session>-<stamp>/` | One run. See below. |
 | `.reverie/specs/` | Stored specs. Its README shows the format. |
 | `.reverie/cache/` | Disposable caches, such as narration audio for the dashboard. |
-| `.reverie/playbook.json` | Lessons the pilot keeps for each host. Set `LAYA_AGENT_PLAYBOOK` to use another path. |
+| `.reverie/playbook.json` | Lessons the pilot keeps for each host. Set `REVERIE_PLAYBOOK` to use another path. |
 | `.reverie/runs/hidden-runs.json` | Ids of runs you hid. |
 
 Git ignores `runs/` and `cache/`. Commit `playbook.json` if its lessons help other people.
@@ -33,6 +33,19 @@ Each run folder holds:
 - `downloads/`: files the session's browser downloaded. See [Downloads](#downloads).
 
 Reading history never creates `.reverie/`. The dashboard and `runs` also read the older `artifacts/agent-sessions/` folder while it exists.
+
+### Trail fields for the decision layers
+
+Events and proposals in the trail name the layer by role.
+
+| Field | Values |
+|---|---|
+| `layer` (on a proposal) | `decision` or `escalation` |
+| `decision_engine` | `jev` or `laya`: the engine behind the decision |
+| `decision_confidence` | The decision engine's confidence (older runs call it `laya_confidence`) |
+| `by` (on act events) | `decision`, `escalation`, `pilot` or `orchestrator`, plus `decision_engine` for `decision` |
+
+The dashboard labels these "Decision engine · Jev" (or Laya), "Escalation model", "Pilot" and "Claude" (the orchestrator). Runs recorded before the role names, with `by` set to `laya`, `jev` or `mercury`, still display: the dashboard maps them to the same labels.
 
 ## Manage runs
 
@@ -94,7 +107,7 @@ reverie ui --root /path/to/runs
 
 `--root` reads runs from another directory instead of `.reverie/runs`. You can repeat it.
 
-The dashboard listens on `127.0.0.1` only. The default port is 7788. Set `LAYA_AGENT_UI_PORT` to change it. If the port is taken, the dashboard picks any free port and `reverie ui` prints the address. One dashboard serves every session. If it is running for a different project, `reverie ui` restarts it on the current project's runs.
+The dashboard listens on `127.0.0.1` only. The default port is 7788. Set `REVERIE_UI_PORT` to change it. If the port is taken, the dashboard picks any free port and `reverie ui` prints the address. One dashboard serves every session. If it is running for a different project, `reverie ui` restarts it on the current project's runs.
 
 ![The dashboard with suites and runs on the left, a frame in the middle, and the event timeline on the right](../../../assets/dashboard.png)
 

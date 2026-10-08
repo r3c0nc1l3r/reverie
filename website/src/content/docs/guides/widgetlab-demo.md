@@ -1,6 +1,6 @@
 ---
 title: WidgetLab demo
-description: A local practice app with a wizard, browser dialogs, late content, a download, tabs, and type-ahead, plus five specs for Laya, Jev, and Mercury.
+description: A local practice app with a wizard, browser dialogs, late content, a download, tabs, and type-ahead, plus five specs for the decision engines (Jev and Laya) and the escalation model.
 ---
 
 WidgetLab is a small, fictional practice app in `examples/widgetlab/`. It has the widgets that trip up browser agents: a multi-step wizard with validation, native confirm and prompt dialogs, content that appears after a delay, a file download, tabs, and type-ahead suggestions. Use it to test the [decision engines](/reverie/reference/models/#decision-engines) locally, without a public site.
@@ -50,7 +50,7 @@ All five pass on fresh data with either engine. Reset the data before each spec.
 
 ## Run a spec
 
-This runs WL-02 with Jev as the fast layer. Leave out `--engine jev` to use Laya.
+This runs WL-02 with Jev as the decision engine. Jev is the default, so `--engine jev` is optional. Use `--engine laya` for local Laya.
 
 ```bash
 cd examples/widgetlab
@@ -64,7 +64,7 @@ reverie --session widgets progress              # poll until the pilot stops
 reverie --session widgets stop
 ```
 
-(`laya-agent` is an alias for `reverie`.) Jev needs `OPENROUTER_API_KEY`.
+(`laya-agent` is an older alias for `reverie`.) Jev needs `OPENROUTER_API_KEY`.
 
 ## What each spec shows
 

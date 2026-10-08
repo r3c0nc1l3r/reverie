@@ -79,11 +79,11 @@ Quote any value you want typed. Reverie types only values that the intent, the p
 | `--until-text TEXT` | Stops once the page shows this text. |
 | `--until-url TEXT` | Stops once the URL contains this text. |
 
-The command prints why it stopped (`paused: ...`) and how many actions each layer ran.
+The command prints why it stopped (`paused: ...`) and how many actions each layer ran (the decision engine and the escalation model).
 
 ## Recipe: step by step with `suggest` and `accept`
 
-`suggest` asks the model for one step. Nothing runs until you accept it.
+`suggest` asks the decision engine for one step. Nothing runs until you accept it.
 
 ```bash
 uv run reverie --session demo goto https://the-internet.herokuapp.com/checkboxes
@@ -92,7 +92,7 @@ uv run reverie --session demo suggest
 uv run reverie --session demo accept
 ```
 
-The proposal shows the element, the confidence, and which layer chose it. If it is wrong, reject it and add a hint:
+The proposal shows the element, the confidence, and which layer chose it (`decision` or `escalation`). If the escalation model overruled the decision engine, an `escalated:` line says why. If it is wrong, reject it and add a hint:
 
 ```bash
 uv run reverie --session demo reject --hint "use the first checkbox"

@@ -3,7 +3,7 @@ title: Running specs
 description: Drive a spec from the terminal as the orchestrator, from starting a session to handling checkpoints and reading the verdict.
 ---
 
-The orchestrator is the person, script or coding agent at the terminal. It starts a session, loads a spec, starts the pilot, and handles anything the pilot cannot do itself. This page walks through that loop. The command is `reverie` (`laya-agent` is an alias). Every command takes `--session NAME`; the default is `default`, or the value of `LAYA_AGENT_SESSION`.
+The orchestrator is the person, script or coding agent at the terminal. It starts a session, loads a spec, starts the pilot, and handles anything the pilot cannot do itself. This page walks through that loop. The command is `reverie` (`laya-agent` is an older alias). Every command takes `--session NAME`; the default is `default`, or the value of `REVERIE_SESSION`.
 
 ## The basic loop
 
@@ -27,7 +27,7 @@ uv run reverie --session demo stop
 | `--headless` | No window; the watch page streams frames instead. |
 | `--ui` | Also open the run dashboard in your browser. |
 | `--goal TEXT` | A starting goal for the autonomous `step` and `run` commands. |
-| `--engine laya\|jev` | The fast decision layer for the session (default Laya, or `LAYA_AGENT_ENGINE`). It drives `do`, `auto`, `step`, `run` and the pilot. See [Decision engines](/reverie/reference/models/#decision-engines). |
+| `--engine laya\|jev` | The decision engine for the session (default Jev, or `REVERIE_DECISION_ENGINE`; Jev needs `OPENROUTER_API_KEY`, Laya is local). It drives `do`, `auto`, `step`, `run` and the pilot. See [Decision engines](/reverie/reference/models/#decision-engines). |
 | `--profile DIR` | Use this Chromium profile directory instead of an isolated per-session one. |
 | `--trail-dir DIR` | Where to write the run folder (default: `.reverie/runs`). |
 | `--bluetooth` | Wake sleeping Bluetooth headphones before each spoken line. |
@@ -164,12 +164,12 @@ Statuses are `pending`, `running`, `pass`, `fail`, `blocked`, `skipped`. Use `pe
 
 ## Other ways to drive
 
-The pilot is the main mode. The lower layers are available directly, which is useful when the pilot is stuck or you want one precise action.
+The pilot is the main mode. The lower layers (the decision engine and the escalation model) are available directly, which is useful when the pilot is stuck or you want one precise action.
 
 | Mode | Commands |
 | --- | --- |
 | One intent | `do "INTENT"` runs the stack on one goal. Options: `--hint` (repeatable), `--max N` (default 6), `--until-text`, `--until-url`. Quote any value to type: `do "Enter '300' in the rate field"`. |
-| One proposal at a time | `suggest [--hint TEXT] [--engine stack\|mercury\|laya\|jev] [--goal TEXT]` shows one proposed action and runs nothing. `accept` runs it. `reject [--hint TEXT]` drops it and adds a steering hint. |
+| One proposal at a time | `suggest [--hint TEXT] [--engine stack\|escalation\|laya\|jev] [--goal TEXT]` shows one proposed action and runs nothing. `accept` runs it. `reject [--hint TEXT]` drops it and adds a steering hint. |
 | Fast loop | `auto [--max N] [--min-confidence 0.55] [--until-text T] [--until-url U] [--goal G] [--engine ...]` repeats suggest and accept until the stack pauses. |
 | Direct control | `observe [--grep TEXT] [--limit N] [--text CHARS] [--settle]` lists elements with ids. Then `act`, `click`, `fill`, `select`, each taking an id like `e7` or `--label`/`--hint`. `fill` and `act` take `--text` (and `--redact` to keep the value out of logs), `select` and `act` take `--option`. Also `hover`, `press Enter\|Tab\|Escape`, `goto URL`, `back`. |
 | Tabs | `tabs`, `tab new URL [--isolated]`, `tab close`, `switch [TARGET]`, `tidy-tabs`. |

@@ -3,7 +3,7 @@ title: Concepts
 description: The three layers, sessions, plans, checkpoints, guards and run evidence that Reverie is built from.
 ---
 
-Reverie runs browser tests that you write as Markdown specs. This page explains the moving parts so the rest of the docs make sense. The command is `reverie`; `laya-agent` is an installed alias for it.
+Reverie runs browser tests that you write as Markdown specs. This page explains the moving parts so the rest of the docs make sense. The command is `reverie`; `laya-agent` is an older alias for it.
 
 ## The three layers
 
