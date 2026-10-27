@@ -159,9 +159,11 @@ def test_ui_review_rejects_invalid_final_frame_without_fallback(tmp_path, monkey
     monkeypatch.setattr(model, "chat_json", lambda *args, **kwargs: (
         calls.append(kwargs) or {"issues": [], "summary": "clear"}, {}))
     s = _review_session(tmp_path)
-    (tmp_path / "earlier.jpg").write_bytes(base64.b64decode(_frame()))
+    frames = tmp_path / "frames"
+    frames.mkdir()
+    (frames / "earlier.jpg").write_bytes(base64.b64decode(_frame()))
     if final_kind == "unreadable":
-        (tmp_path / "final.jpg").write_bytes(b"not an image")
+        (frames / "final.jpg").write_bytes(b"not an image")
     result = pilot.ui_review(s, s.test["steps"][0], ["earlier.jpg", "final.jpg"])
     assert result is None
     assert calls == []
