@@ -225,7 +225,9 @@ def test_codex_valid_turn_returns_json_and_passes_image(tmp_path, monkeypatch):
         messages = [json.loads(line) for line in transcript.read_text().splitlines()]
         turns = [message for message in messages if message.get("method") == "turn/start"]
         assert len(turns) == 1
-        assert "aGVsbG8=" in json.dumps(turns[0]["params"])
+        inputs = turns[0]["params"]["input"]
+        assert any(item.get("type") == "text" and item.get("text") for item in inputs)
+        assert {"type": "image", "url": "data:image/jpeg;base64,aGVsbG8="} in inputs
     finally:
         codex_provider.close()
         codex_provider.resume()
