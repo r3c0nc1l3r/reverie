@@ -7,6 +7,7 @@ last observation actually contains. Nothing here accepts selectors or executable
 import base64
 import hashlib
 import json
+import logging
 import os
 import re
 import threading
@@ -459,15 +460,22 @@ class Session(CoordinatedSession):
         self.last_capture_ok = False
         self._visual_frame_marker = None
         self._visual_frame_state = None
+
+        def visual_evidence(marker):
+            if marker is None:
+                return None, None
+            try:
+                return self.browser.evaluate(MARKER), self.browser.visual_state()
+            except Exception:
+                return None, None
+
         try:
             marker = (self.page or {}).get("marker")
-            before = self.browser.evaluate(MARKER) if marker is not None else None
-            visual_before = self.browser.visual_state() if marker is not None else None
+            before, visual_before = visual_evidence(marker)
             self.frame = self.browser.capture_masked(format="jpeg", quality=85, _response_timeout=4)
             self.frame_captured_at = time.time()
             self.frame_id = hashlib.sha256(self.frame.encode()).hexdigest()[:20]
-            after = self.browser.evaluate(MARKER) if marker is not None else None
-            visual_after = self.browser.visual_state() if marker is not None else None
+            after, visual_after = visual_evidence(marker)
             if (marker is not None and before == marker and after == marker
                     and visual_before is not None and visual_before == visual_after):
                 self._visual_frame_marker = marker
@@ -1553,8 +1561,8 @@ class Session(CoordinatedSession):
                 raise SessionError(f"{action['id']} is a {action['kind']} target; it does not take text")
             if action["kind"] == "fill" and (redact or self.browser.secret_matches(text)):
                 if type(action.get("node")) is not int:
-                    raise SessionError("Sensitive target could not be tracked; action withheld.")
-                self.register_secret(text, action["node"])
+                    logging.warning("Screenshot masking: sensitive field identity could not be inspected.")
+                self.register_secret(text, action.get("node"))
             page = self.page
             self.status = "acting"
             self.say(narration or self.phrase(action, text, secret=redact), highlight=action.get("rect"), speak=False)

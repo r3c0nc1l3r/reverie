@@ -12,6 +12,7 @@ from pathlib import Path
 from urllib.parse import urlparse
 
 from .. import __version__
+from ..image_format import image_mime
 from .cli import call
 from .coordination import CoordinationStore
 from .project import project_root
@@ -549,7 +550,7 @@ class MCPAdapter:
                 base64.b64decode(image, validate=True)
             except (ValueError, TypeError) as error:
                 raise ToolError("worker returned an invalid target crop") from error
-            return tool_result(raw, images=tuple((value, "image/jpeg") for value in (raw_frame, image) if value))
+            return tool_result(raw, images=tuple((value, image_mime(value)) for value in (raw_frame, image) if value))
         else:  # pragma: no cover - tools/list and dispatch share the same catalog.
             raise ToolError(f"Unknown tool: {name}")
         return tool_result(result)

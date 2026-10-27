@@ -99,7 +99,7 @@ that starts with `[admin]` becomes a checkpoint for the orchestrator. After a pa
   - Never accept CSS selectors or executable code from a caller, model, or spec.
   - Commit buttons (Save, Delete, Confirm, and similar) need an explicit intent.
   - The stack types only values that are stated.
-  - Password fields go only through `secret`. Secrets never enter argv, narration, the overlay, the trail, or model context.
+  - Password fields go only through `secret`. Do not put raw secret values in argv, narration, the overlay, the trail, or model text. Screenshot masking is best effort and is not a secrecy guarantee.
   - Tokens and codes stay masked in trails.
 - **Tests.** A behavior change needs a pytest test in `tests/test_control.py` that fails without it.
   Mock the browser and models, as the existing tests do.

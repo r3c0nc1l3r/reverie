@@ -9,6 +9,8 @@ import tempfile
 import threading
 import time
 
+from .image_format import image_data_uri
+
 DEFAULT_MODEL = "gpt-6.1-terra"
 
 
@@ -156,7 +158,7 @@ class _Client:
         for image in images:
             if not isinstance(image, str):
                 raise CodexError("Codex image input must be a base64 image string.")
-            url = image if image.startswith("data:image/") else "data:image/jpeg;base64," + image
+            url = image if image.startswith("data:image/") else image_data_uri(image)
             inputs.append({"type": "image", "url": url})
         params = {"threadId": thread_id, "input": inputs, "model": model}
         if reasoning_effort:

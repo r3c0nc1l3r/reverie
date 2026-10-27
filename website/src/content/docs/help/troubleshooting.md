@@ -169,7 +169,7 @@ Other `refused:` messages and their fixes:
 | `refused: unknown checkpoint ID` | Check the id with `checkpoints`. |
 | `Checkpoint ... is already done` | It was resolved already. |
 
-Reverie also masks tokens and codes in trails and model context, and the session never runs shell commands itself. A checkpoint's command runs only when you run `reverie exec <id>` and confirm.
+Reverie also redacts recognized tokens and codes in trails and model text. Screenshot masking is best effort; unsupported fields can stay visible. Do not use real secrets without your own review. The session never runs shell commands itself. A checkpoint's command runs only when you run `reverie exec <id>` and confirm.
 
 ## Dialogs
 

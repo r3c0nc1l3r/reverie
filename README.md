@@ -4,6 +4,8 @@
 
 Reverie runs browser tests from Markdown specs. A decision engine makes each click, a multimodal pilot runs the spec step by step, and you control everything from a terminal CLI. Group each investigation into a testing session, follow its live evidence, and take control at a safe boundary.
 
+Screenshot masking is best effort: unsupported fields can stay visible. Do not use real secrets without your own review.
+
 [![Watch the Reverie demo](docs/images/reverie-demo-poster.jpg)](https://github.com/r3c0nc1l3r/reverie/releases/download/v0.2.0/reverie-demo.mp4)
 
 **[Watch the demo](https://github.com/r3c0nc1l3r/reverie/releases/download/v0.2.0/reverie-demo.mp4)** · 84 seconds · [Captions](https://github.com/r3c0nc1l3r/reverie/releases/download/v0.2.0/reverie-demo.en.srt) · [Transcript and credits](videos/reverie-demo/README.md)
@@ -23,7 +25,7 @@ Reverie is the agent operation mode of [laya-ultrafast](https://github.com/Comma
 | Pilot (multimodal model, OpenRouter) | Runs the spec: sends intents, checks results, marks steps, records findings, reviews each step's screenshots, and speaks short progress updates. |
 | Orchestrator (you or an agent) | Starts sessions and specs, signs in, handles checkpoints (database and mail proof), and reviews verdicts. |
 
-Guards keep the run safe: commit buttons (Save, Delete, Confirm, and similar) need an explicit intent, the stack types only stated values, and loops and stalls end in a checkpoint instead of repetition. Tokens and codes are masked in trails and model context.
+Guards keep the run safe: commit buttons (Save, Delete, Confirm, and similar) need an explicit intent, the stack types only stated values, and loops and stalls end in a checkpoint instead of repetition. Recognized tokens and codes are redacted in trails and model text. Screenshot masking is best effort.
 
 ## Setup
 
@@ -161,7 +163,9 @@ Use the [synthetic smoke lab](examples/smoke-lab/README.md) to explore delayed i
 
 ## Screenshot privacy
 
-New screenshots cover filled password, OTP, numeric-code, and tracked sensitive fields with opaque stripes before sharing or saving. Empty native fields keep their placeholders and borders visible; filled fields preserve borders when safe. A privacy mask is not proof of a hidden value or control. `REVERIE_SECRET_SELECTORS` accepts a trusted JSON array of CSS selectors for other private regions. Invalid configuration or a failed check withholds capture. Existing frames and clips are not rewritten, and in-flight images cannot be recalled. Review earlier evidence separately before sharing; standalone callers must serialize privacy registration with model operations. See [configuration and limits](docs/screenshot-privacy.md).
+Screenshot masking is **best effort, not a guarantee**. Unsupported fields and masking faults can leave sensitive content visible. Do not point Reverie at real secrets without your own review; prefer synthetic test data and inspect screenshots before sharing.
+
+Reverie attempts field-local opaque stripes on populated password, OTP, authentication-code and tracked sensitive fields. Empty native fields keep placeholders and borders visible; filled borders remain visible where practical. Matching uses exact values or Unicode NFKC equality, with no numeric-substring matching or stale-target fan-out. `REVERIE_SECRET_SELECTORS` accepts a trusted JSON array for form or text fields. Invalid entries and masking faults produce sanitized warnings while keeping the fresh capture when possible. Masks do not establish hidden values or controls. Existing frames, clips and in-flight images are not recalled. See [configuration and limits](docs/screenshot-privacy.md).
 
 ## Downloads
 

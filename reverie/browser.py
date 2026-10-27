@@ -3,6 +3,7 @@
 import base64
 import hashlib
 import json
+import logging
 import math
 import secrets
 import sys
@@ -144,16 +145,9 @@ class Browser:
         """Identify values derived from an answer already registered as sensitive."""
         if not isinstance(value, str) or not value:
             return False
-        def normalize(text):
-            return "".join(c for c in unicodedata.normalize("NFKC", text).casefold() if c.isalnum())
-        candidate = normalize(value)
+        candidate = unicodedata.normalize("NFKC", value)
         for known in getattr(self, "secret_values", ()):
-            if value == known:
-                return True
-            existing = normalize(known)
-            if candidate and existing and (candidate == existing or
-                    ((min(len(candidate), len(existing)) >= 3 or (candidate.isdigit() and existing.isdigit())) and
-                     (candidate in existing or existing in candidate))):
+            if value == known or candidate == unicodedata.normalize("NFKC", known):
                 return True
         return False
 
@@ -177,7 +171,8 @@ class Browser:
             if invalidate:
                 invalidate()
             if type(node) is int or point is not None:
-                target = self.evaluate("""(([node,point]) => {
+                try:
+                    target = self.evaluate("""(([node,point]) => {
               const e=point ? document.elementFromPoint(point[0],point[1]) : window.__jevFast?.nodes.get(node);
               const c=window.__jevFast;
               if (!e || !c) return null;
@@ -185,10 +180,13 @@ class Browser:
               const id=c.ids.get(e); c.nodes.set(id,e);
               return {origin:performance.timeOrigin,node:id};
             })""" + "(" + json.dumps([node, point]) + ")")
-                if not isinstance(target, dict):
-                    raise CapturePrivacyError("Sensitive target could not be tracked; action withheld.")
-                if target not in self.secret_targets:
-                    self.secret_targets.append(target)
+                    if (not isinstance(target, dict) or type(target.get("node")) is not int or
+                            not isinstance(target.get("origin"), (int, float))):
+                        raise ValueError
+                    if target not in self.secret_targets:
+                        self.secret_targets.append(target)
+                except Exception:
+                    logging.warning("Screenshot masking: sensitive field identity could not be inspected.")
         finally:
             with self._privacy_lock:
                 self._privacy_pending -= 1
@@ -376,8 +374,8 @@ class Browser:
             raise StalePage("Page changed since this decision. Observe again.")
         if action["kind"] == "fill" and self.secret_matches(text):
             if type(action.get("node")) is not int:
-                raise CapturePrivacyError("Sensitive target could not be tracked; action withheld.")
-            self.register_secret(text, action["node"])
+                logging.warning("Screenshot masking: sensitive field identity could not be inspected.")
+            self.register_secret(text, action.get("node"))
         if action["kind"] == "wait":
             time.sleep(0.5)
         result = browser_operation({"operation": "act", "session": self.session, "action": action, "text": text})

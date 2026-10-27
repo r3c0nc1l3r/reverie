@@ -23,6 +23,7 @@ from urllib.parse import urlparse
 import httpx
 from aiohttp import WSMsgType, web
 
+from ..image_format import image_mime
 from ..settings import setting
 from .live import ViewerBuffer
 from .project import cache_dir, run_roots
@@ -665,7 +666,8 @@ def create_app(roots, token, project_root=None, poll_interval=0.25, viewer_event
         for root in current_roots():
             target = root / folder / "frames" / name
             if target.is_file():
-                return web.Response(body=await asyncio.to_thread(target.read_bytes), content_type="image/jpeg")
+                body = await asyncio.to_thread(target.read_bytes)
+                return web.Response(body=body, content_type=image_mime(body))
         raise web.HTTPNotFound(text=json.dumps({"error": "No such frame"}), content_type="application/json")
 
     async def api_speech(request):

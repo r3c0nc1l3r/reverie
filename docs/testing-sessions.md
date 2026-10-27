@@ -62,7 +62,7 @@ The JSON state includes logical session, run, worker, incarnation, observation, 
 
 ## Screenshot privacy
 
-New captures cover filled password, OTP, numeric-code, and tracked sensitive fields with opaque stripes. Empty native fields keep placeholders and borders visible; filled borders remain visible when safe. Masks do not prove hidden values or controls. Use trusted `REVERIE_SECRET_SELECTORS` for other regions. Invalid settings or failed privacy checks withhold images. Existing saved evidence is not retroactively sanitized. See [screenshot privacy](screenshot-privacy.md) for configuration and limits.
+Masking is **best effort, not a guarantee**. Unsupported fields and masking faults can leave content visible. Do not use real secrets without your own review. Recognized populated fields receive local stripes; empty fields keep placeholders and borders. Invalid selectors and masking faults warn while keeping fresh captures where possible. No whole-frame fallback, numeric-substring matching or stale-target fan-out is used. Existing evidence is not rewritten. See [screenshot privacy](screenshot-privacy.md) for configuration and limits.
 
 ## Temporary evidence
 

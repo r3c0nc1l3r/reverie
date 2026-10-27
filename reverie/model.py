@@ -13,6 +13,7 @@ from urllib.parse import urlparse
 
 import httpx
 
+from .image_format import image_data_uri
 from .questions import GOAL_PLAN, NEXT_ACTION, TARGET, TEXT_VALUE
 from .settings import setting
 
@@ -394,7 +395,7 @@ def chat_json(system, context, model=None, max_tokens=1024, reasoning_effort=Non
             **reasoning,
             "messages": [{"role": "system", "content": system}, {"role": "user", "content": (
                 [{"type": "text", "text": json.dumps(context)}]
-                + [{"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{image}"}} for image in images]
+                + [{"type": "image_url", "image_url": {"url": image_data_uri(image)}} for image in images]
             ) if images else json.dumps(context)}],
         },
         headers=provider_headers(provider),

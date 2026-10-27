@@ -185,9 +185,9 @@ See [Codex pilot](/reverie/guides/codex-pilot/) before selecting the local provi
 
 | Variable | Default | What it does |
 | --- | --- | --- |
-| `REVERIE_SECRET_SELECTORS` | `[]` | Trusted JSON array of CSS selectors for regions to mask in new screenshots. Invalid JSON or CSS withholds capture. Configure it in the operator environment, never through a spec or model request. |
+| `REVERIE_SECRET_SELECTORS` | `[]` | Trusted JSON array of CSS selectors for form or text fields. Invalid entries or non-field matches are ignored with sanitized warnings. Configure it in the operator environment, never through a spec or model request. |
 
-Automatic masks cover password, OTP, numeric-code, and tracked sensitive fields. Existing saved captures are not rewritten. See [screenshot privacy](https://github.com/r3c0nc1l3r/reverie/blob/main/docs/screenshot-privacy.md) for scope and compositor limits.
+Masking is best effort, not a guarantee. Unsupported fields can remain visible; do not use real secrets without your own review. Masks are field-local, and masking faults warn while keeping fresh captures where possible. Existing saved captures are not rewritten. See [screenshot privacy](https://github.com/r3c0nc1l3r/reverie/blob/main/docs/screenshot-privacy.md) for scope and compositor limits.
 
 ## Downloads
 

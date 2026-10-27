@@ -1,11 +1,13 @@
 """Privacy contracts for screenshots taken by a real headless session."""
 
+import errno
 import http.server
 import os
 import subprocess
 import sys
 import tempfile
 import threading
+import time
 import uuid
 from pathlib import Path
 
@@ -80,16 +82,23 @@ def privacy_browser(tmp_path):
                   input::placeholder { color: black; opacity: 1; }
                   #empty-password { top: 20px; } #empty-otp { top: 80px; }
                   #populated { top: 140px; } #ordinary { top: 200px; } #empty-number { top: 260px; }
+                  #zip { top: 320px; } #case { top: 380px; } #status { top: 440px; } #count { top: 500px; }
                 </style>
                 <input id="empty-password" type="password" placeholder="Enter password">
                 <input id="empty-otp" autocomplete="one-time-code" placeholder="Enter code">
                 <input id="populated" type="password" value="synthetic-populated-secret">
                 <input id="ordinary" value="ordinary value">
-                <input id="empty-number" type="number" aria-label="Security code" placeholder="Enter code">'''
+                <input id="empty-number" type="number" aria-label="Security code" placeholder="Enter code">
+                <input id="zip" inputmode="numeric" aria-label="ZIP code" value="12345">
+                <input id="case" aria-label="Case code" value="A713">
+                <input id="status" aria-label="Status code" value="200">
+                <input id="count" type="number" aria-label="Quantity" value="19">'''
             if self.path == "/closed":
                 content = content.replace(b"<!-- CLOSED_SHADOW -->", b"""<div id="shadow"></div><script>
                   document.getElementById('shadow').attachShadow({mode:'closed'}).innerHTML =
-                    '<div style="width:100%;height:100%;background:rgb(230,0,160)">secret</div>';
+                    '<label for="shadow-code" style="position:absolute;left:-9999px">Security code</label>' +
+                    '<input id="shadow-code" type="number" value="123456" style="width:100%;height:100%;' +
+                    'box-sizing:border-box;border:0;background:rgb(230,0,160)">';
                 </script>""")
             if self.path in ("/filtered", "/blur-baseline"):
                 content = content.replace(
@@ -113,7 +122,8 @@ def privacy_browser(tmp_path):
 
     server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
     threading.Thread(target=server.serve_forever, daemon=True).start()
-    with tempfile.TemporaryDirectory(prefix="rvp-", dir="/tmp") as short:
+    runtime_dir = tempfile.TemporaryDirectory(prefix="rvp-", dir="/tmp")
+    with runtime_dir as short:
         short = Path(short)
         for directory in ("runtime", "bh-runtime", "bh-tmp", "config"):
             (short / directory).mkdir(mode=0o700)
@@ -139,6 +149,15 @@ def privacy_browser(tmp_path):
             call("stop")
             server.shutdown()
             server.server_close()
+            deadline = time.monotonic() + 5
+            while True:
+                try:
+                    runtime_dir.cleanup()
+                    break
+                except OSError as error:
+                    if error.errno != errno.ENOTEMPTY or time.monotonic() >= deadline:
+                        raise
+                    time.sleep(0.1)
 
 
 def _assert_masked(image, y):
@@ -147,7 +166,7 @@ def _assert_masked(image, y):
     assert not (red > 200 and green < 35 and blue > 125), (red, green, blue)
 
 
-def test_screenshot_masks_sensitive_fields_custom_region_and_cross_origin_frame(privacy_browser, tmp_path):
+def test_screenshot_masks_sensitive_fields_and_leaves_nonfield_regions_visible(privacy_browser, tmp_path):
     start, call, _, _, _ = privacy_browser
     started = start('["#custom"]')
     assert started.returncode == 0, started.stderr
@@ -156,28 +175,44 @@ def test_screenshot_masks_sensitive_fields_custom_region_and_cross_origin_frame(
     assert result.returncode == 0, result.stderr
     with Image.open(output) as image:
         assert image.size[0] > 160 and image.size[1] > 356
-        for y in (20, 70, 120, 170, 220, 270):
+        for y in (20, 70, 120, 170):
             _assert_masked(image, y)
+        for y in (220, 270, 420):
+            red, green, blue = image.convert("RGB").getpixel((145, y + 25))
+            assert red > 200 and green < 35 and blue > 125
         assert image.convert("RGB").getpixel((200, 25)) == (255, 255, 255)
-        red, green, blue = image.convert("RGB").getpixel((145, 445))
+
+
+def test_trusted_selector_masks_a_populated_field_only(privacy_browser, tmp_path):
+    start, call, _, _, _ = privacy_browser
+    started = start('["#other"]')
+    assert started.returncode == 0, started.stderr
+    output = tmp_path / "selected.png"
+    result = call("--json", "screenshot", str(output))
+    assert result.returncode == 0, result.stderr
+    with Image.open(output) as image:
+        _assert_masked(image, 420)
+        red, green, blue = image.convert("RGB").getpixel((145, 245))
         assert red > 200 and green < 35 and blue > 125
+        assert image.convert("RGB").getpixel((200, 25)) == (255, 255, 255)
 
 
 @pytest.mark.parametrize("selectors", ["not-json", '{"selector":"#custom"}', '["["]'])
-def test_invalid_trusted_selectors_withhold_screenshot(privacy_browser, tmp_path, selectors):
+def test_invalid_trusted_selectors_are_ignored_without_leaking_metadata(privacy_browser, tmp_path, selectors):
     start, call, _, _, _ = privacy_browser
     started = start(selectors)
+    assert started.returncode == 0, started.stderr
     output = tmp_path / "capture.png"
-    if started.returncode == 0:
-        result = call("--json", "screenshot", str(output))
-        assert result.returncode != 0 or not output.exists()
-        assert selectors not in result.stdout + result.stderr
-    else:
-        assert selectors not in started.stdout + started.stderr
-    assert not output.exists()
+    result = call("--json", "screenshot", str(output))
+    assert result.returncode == 0, result.stderr
+    assert selectors not in started.stdout + started.stderr + result.stdout + result.stderr
+    with Image.open(output) as image:
+        _assert_masked(image, 20)
+        red, green, blue = image.convert("RGB").getpixel((145, 245))
+        assert red > 200 and green < 35 and blue > 125
 
 
-def test_redacted_fill_masks_current_and_replacement_fields(privacy_browser, tmp_path):
+def test_redacted_fill_masks_target_without_fanout_after_removal(privacy_browser, tmp_path):
     start, call, values, removed, trigger_removal = privacy_browser
     started = start()
     assert started.returncode == 0, started.stderr
@@ -195,7 +230,9 @@ def test_redacted_fill_masks_current_and_replacement_fields(privacy_browser, tmp
     result = call("--json", "screenshot", str(second))
     assert result.returncode == 0, result.stderr
     with Image.open(second) as image:
-        _assert_masked(image, 420)
+        red, green, blue = image.convert("RGB").getpixel((145, 445))
+        assert red > 200 and green < 35 and blue > 125
+        _assert_masked(image, 20)
 
 
 def test_blurred_ordinary_field_has_visible_spill_beyond_padding(privacy_browser, tmp_path):
@@ -208,21 +245,6 @@ def test_blurred_ordinary_field_has_visible_spill_beyond_padding(privacy_browser
     with Image.open(output) as image:
         red, green, blue = image.convert("RGB").getpixel((174, 38))
         assert red - green >= 10 and blue - green >= 10, (red, green, blue)
-
-
-def test_filtered_password_ancestor_cannot_leak_outside_field(privacy_browser, tmp_path):
-    start, call, _, _, _ = privacy_browser
-    started = start(path="/filtered")
-    assert started.returncode == 0, started.stderr
-    output = tmp_path / "filtered.png"
-    result = call("--json", "screenshot", str(output))
-    if result.returncode != 0:
-        assert not output.exists()
-        return
-    with Image.open(output) as image:
-        # The blur extends beyond the field and the usual 12px padding.
-        red, green, blue = image.convert("RGB").getpixel((174, 38))
-        assert red - green < 10 or blue - green < 10, (red, green, blue)
 
 
 def test_register_secret_invalidates_cached_images_without_deleting_history(tmp_path):
@@ -241,17 +263,19 @@ def test_register_secret_invalidates_cached_images_without_deleting_history(tmp_
     assert historical.read_bytes() == b"historical evidence"
 
 
-def test_closed_shadow_content_is_masked_or_capture_is_withheld(privacy_browser, tmp_path):
+def test_closed_shadow_labeled_numeric_code_is_local_to_its_field(privacy_browser, tmp_path):
     start, call, _, _, _ = privacy_browser
     started = start(path="/closed")
     assert started.returncode == 0, started.stderr
     output = tmp_path / "closed.png"
     result = call("--json", "screenshot", str(output))
-    if result.returncode != 0:
-        assert not output.exists()
-        return
+    assert result.returncode == 0, result.stderr
     with Image.open(output) as image:
         _assert_masked(image, 320)
+        red, green, blue = image.convert("RGB").getpixel((145, 445))
+        assert red > 200 and green < 35 and blue > 125
+        assert image.convert("RGB").getpixel((200, 25)) == (255, 255, 255)
+        _assert_masked(image, 20)
 
 
 def test_standalone_browser_tracks_target_for_reformatted_known_secret(tmp_path):
@@ -265,6 +289,8 @@ def test_standalone_browser_tracks_target_for_reformatted_known_secret(tmp_path)
       input { position: absolute; left: 20px; top: 20px; width: 140px; height: 36px;
               box-sizing: border-box; border: 0; background: rgb(230,0,160); }
     </style><input aria-label="Reference" value="synthetic-registered-731">
+    <input aria-label="Ordinary" value="ordinary" style="top:70px">
+    <input aria-label="Unrelated" value="unrelated" style="top:120px">
     <script>document.querySelector('input').addEventListener('input', event => {
       event.target.value = 'normalized';
     });</script>'''
@@ -284,6 +310,8 @@ def test_standalone_browser_tracks_target_for_reformatted_known_secret(tmp_path)
     threading.Thread(target=server.serve_forever, daemon=True).start()
     child = '''
 import base64
+import io
+import logging
 import os
 import sys
 import threading
@@ -352,6 +380,11 @@ try:
     assert not registration_errors, registration_errors
     assert completed_while_pending, "snapshot blocked during registration"
     assert snapshot_result == [None], snapshot_result
+    assert browser.secret_matches("synthetic-registered-731")
+    assert browser.secret_matches(chr(0xff53) + "ynthetic-registered-731")
+    assert not browser.secret_matches("prefix-synthetic-registered-731-suffix")
+    assert not browser.secret_matches("SYNTHETIC-REGISTERED-731")
+    assert not browser.secret_matches("syntheticregistered731")
     deadline = time.monotonic() + 3
     while True:
         try:
@@ -383,6 +416,42 @@ try:
                 raise
             time.sleep(0.1)
     Path(sys.argv[3]).write_bytes(base64.b64decode(capture))
+    browser.close()
+    browser = Browser(sys.argv[1])
+    browser.register_secret(value="synthetic-registered-731")
+    page = browser.observe()
+    action = next(a for a in page["actions"] if a.get("kind") == "fill" and "Ordinary" in a.get("label", ""))
+    real_register, real_evaluate = browser.register_secret, browser.evaluate
+    faults = []
+    log_output = io.StringIO()
+    handler = logging.StreamHandler(log_output)
+    handler.setLevel(logging.WARNING)
+    logging.getLogger().addHandler(handler)
+
+    def register_with_identity_failure(*args, **kwargs):
+        faults.append(True)
+        def fail_identity(*args, **kwargs):
+            raise RuntimeError("synthetic-private-identity-error")
+        browser.evaluate = fail_identity
+        try:
+            return real_register(*args, **kwargs)
+        finally:
+            browser.evaluate = real_evaluate
+
+    browser.register_secret = register_with_identity_failure
+    try:
+        browser.act(action, page, text="synthetic-registered-731")
+    finally:
+        logging.getLogger().removeHandler(handler)
+    assert faults, "known-secret fill did not register its target"
+    assert log_output.getvalue(), "identity failure did not warn"
+    assert "synthetic-private-identity-error" not in log_output.getvalue()
+    assert "synthetic-registered-731" not in log_output.getvalue()
+    assert browser.secret_matches("synthetic-registered-731")
+    assert browser.evaluate("document.querySelector('[aria-label=Ordinary]').value") == "synthetic-registered-731"
+    browser.observe(screenshot=False)
+    fault_capture = browser.capture_masked(format="png")
+    Path(sys.argv[3] + ".fault").write_bytes(base64.b64decode(fault_capture))
 finally:
     if browser is not None:
         browser.close()
@@ -411,6 +480,11 @@ finally:
             with Image.open(output) as image:
                 _assert_masked(image, 20)
                 assert image.convert("RGB").getpixel((200, 25)) == (255, 255, 255)
+            with Image.open(str(output) + ".fault") as image:
+                _assert_masked(image, 70)
+                red, green, blue = image.convert("RGB").getpixel((145, 145))
+                assert red > 200 and green < 35 and blue > 125
+                assert image.convert("RGB").getpixel((200, 25)) == (255, 255, 255)
     finally:
         server.shutdown()
         server.server_close()
@@ -426,7 +500,7 @@ def test_empty_fields_keep_placeholder_and_populated_field_has_striped_mask(priv
     with Image.open(output) as image:
         rgb = image.convert("RGB")
         for top in (20, 80, 260):
-            assert rgb.getpixel((190, top + 20)) == (230, 0, 160)
+            assert rgb.getpixel((170, top + 20)) == (230, 0, 160)
             assert rgb.getpixel((21, top + 20)) == (0, 220, 220)
             # The placeholder must remain visible against the field background.
             assert any(max(rgb.getpixel((x, y))) < 100
@@ -442,7 +516,8 @@ def test_empty_fields_keep_placeholder_and_populated_field_has_striped_mask(priv
                    for x in range(110, 189) for y in range(148, 172))
         assert any(rgb.getpixel((x, y)) != rgb.getpixel((x, y + 1))
                    for x in range(110, 190) for y in range(148, 171))
-        assert rgb.getpixel((190, 220)) == (230, 0, 160)  # An unprotected control stays visible.
+        for top in (200, 320, 380, 440, 500):
+            assert rgb.getpixel((170, top + 20)) == (230, 0, 160)
 
 
 @pytest.mark.parametrize("requested,expected", [("png", "PNG"), ("jpeg", "JPEG")])
@@ -456,10 +531,10 @@ def test_capture_uses_lossless_source_and_preserves_requested_output_format(requ
     Image.new("RGB", (64, 48), (61, 131, 211)).save(source, format="PNG")
     screenshot_calls = []
     geometry = {"width": 64, "height": 48, "rects": [], "documents": []}
-    evaluation_results = iter([True, geometry, geometry, True])
+    evaluation_results = iter([geometry, geometry])
 
     def evaluate(_expression):
-        return next(evaluation_results, True)
+        return next(evaluation_results, geometry)
 
     def call(method, **params):
         if method == "DOM.getDocument":
@@ -475,3 +550,229 @@ def test_capture_uses_lossless_source_and_preserves_requested_output_format(requ
     with Image.open(io.BytesIO(base64.b64decode(encoded))) as output:
         assert output.format == expected
         assert output.size == (64, 48)
+
+
+def test_geometry_failure_warns_and_returns_fresh_capture_without_sensitive_diagnostics(caplog):
+    import base64
+    import io
+
+    from reverie.capture import capture_masked
+
+    images = []
+    for color in ((25, 75, 125), (195, 135, 65)):
+        output = io.BytesIO()
+        Image.new("RGB", (16, 16), color).save(output, format="PNG")
+        images.append(base64.b64encode(output.getvalue()).decode())
+    captures = iter(images)
+
+    def call(method, **params):
+        if method == "DOM.getDocument":
+            return {"root": {"nodeId": 1, "children": []}}
+        if method == "Page.captureScreenshot":
+            return {"data": next(captures)}
+        raise AssertionError(f"unexpected CDP method: {method}")
+
+    def evaluate(_expression):
+        raise RuntimeError("synthetic-private-selector-731")
+
+    with caplog.at_level("WARNING"):
+        first = capture_masked(call, evaluate, format="png")
+        second = capture_masked(call, evaluate, format="png")
+    for encoded, expected in ((first, (25, 75, 125)), (second, (195, 135, 65))):
+        with Image.open(io.BytesIO(base64.b64decode(encoded))) as image:
+            assert image.convert("RGB").getpixel((5, 5)) == expected
+    assert caplog.records
+    assert "synthetic-private-selector-731" not in caplog.text
+
+
+def test_output_conversion_failure_returns_original_png(monkeypatch):
+    import base64
+    import io
+
+    from reverie.capture import capture_masked
+
+    source = io.BytesIO()
+    Image.new("RGB", (16, 16), (29, 79, 129)).save(source, format="PNG")
+    geometry = {"width": 16, "height": 16, "rects": [], "documents": []}
+
+    def call(method, **params):
+        if method == "DOM.getDocument":
+            return {"root": {"nodeId": 1, "children": []}}
+        if method == "Page.captureScreenshot":
+            return {"data": base64.b64encode(source.getvalue()).decode()}
+        raise AssertionError(f"unexpected CDP method: {method}")
+
+    def fail_save(*args, **kwargs):
+        raise OSError("synthetic encoder failure")
+
+    monkeypatch.setattr(Image.Image, "save", fail_save)
+    encoded = capture_masked(call, lambda expression: geometry, format="jpeg")
+    with Image.open(io.BytesIO(base64.b64decode(encoded))) as image:
+        assert image.format == "PNG"
+        assert image.convert("RGB").getpixel((5, 5)) == (29, 79, 129)
+
+
+def _encoded_image(fmt):
+    import base64
+    import io
+
+    buffer = io.BytesIO()
+    Image.new("RGB", (12, 12), (21, 71, 121)).save(buffer, format=fmt)
+    return base64.b64encode(buffer.getvalue()).decode()
+
+
+@pytest.mark.parametrize("fmt,mime", [("PNG", "image/png"), ("JPEG", "image/jpeg")])
+def test_image_mime_and_hosted_chat_use_actual_image_bytes(monkeypatch, fmt, mime):
+    import base64
+
+    from reverie import image_format, model
+
+    encoded = _encoded_image(fmt)
+    assert image_format.image_mime(encoded) == mime
+    assert image_format.image_mime(base64.b64decode(encoded)) == mime
+    uri = f"data:{mime};base64,{encoded}"
+    assert image_format.image_data_uri(encoded) == uri
+    sent = {}
+    monkeypatch.setenv("REVERIE_PILOT_PROVIDER", "opencode-go")
+    monkeypatch.setenv("OPENCODE_GO_API_KEY", "synthetic-test-key")
+
+    def post(url, key, body, headers=None):
+        sent.update(body)
+        return {"choices": [{"message": {"content": '{"ok": true}'}}]}
+
+    monkeypatch.setattr(model, "post_json", post)
+    output, _ = model.chat_json("system", {}, model="glm-5.3-flash", role="pilot", images=(encoded,))
+    assert output == {"ok": True}
+    images = [part["image_url"]["url"] for message in sent["messages"]
+              if isinstance(message.get("content"), list) for part in message["content"]
+              if part.get("type") == "image_url"]
+    assert uri in images
+
+
+def test_codex_receives_png_data_uri_for_png_bytes(tmp_path, monkeypatch):
+    import json
+
+    from test_pilot_contracts import _fake_codex_server
+
+    from reverie import codex_provider
+
+    executable, transcript = _fake_codex_server(tmp_path, "success")
+    monkeypatch.setenv("PATH", str(tmp_path))
+    monkeypatch.setenv("REVERIE_CODEX_COMMAND", str(executable))
+    monkeypatch.setenv("REVERIE_CODEX_TIMEOUT", "3")
+    encoded = _encoded_image("PNG")
+    codex_provider.close()
+    codex_provider.resume()
+    try:
+        decision, _ = codex_provider.chat_json("system", "context", images=(encoded,))
+        assert decision == {"op": "wait"}
+        turns = [json.loads(line) for line in transcript.read_text().splitlines()]
+        inputs = next(message["params"]["input"] for message in turns if message.get("method") == "turn/start")
+        assert {"type": "image", "url": f"data:image/png;base64,{encoded}"} in inputs
+    finally:
+        codex_provider.close()
+        codex_provider.resume()
+
+
+def test_dashboard_frame_content_type_follows_bytes_not_extension(tmp_path):
+    import asyncio
+    import base64
+
+    from aiohttp.test_utils import TestClient, TestServer
+
+    from reverie.control.dashboard import create_app
+
+    run = tmp_path / ".reverie" / "runs" / "synthetic-run"
+    (run / "frames").mkdir(parents=True)
+    content = base64.b64decode(_encoded_image("PNG"))
+    (run / "frames" / "capture.jpg").write_bytes(content)
+
+    async def exercise():
+        app = create_app([run.parent], token="synthetic-token", project_root=tmp_path)
+        async with TestClient(TestServer(app)) as client:
+            response = await client.get("/api/frame", params={"dir": run.name, "file": "capture.jpg"},
+                                        headers={"X-Laya-Agent-Token": "synthetic-token"})
+            assert response.status == 200
+            assert response.content_type == "image/png"
+            assert await response.read() == content
+
+    asyncio.run(exercise())
+
+
+def test_cdp_screenshot_failure_propagates():
+    from reverie.capture import capture_masked
+
+    geometry = {"width": 16, "height": 16, "rects": [], "documents": []}
+
+    def call(method, **params):
+        if method == "DOM.getDocument":
+            return {"root": {"nodeId": 1, "children": []}}
+        if method == "Page.captureScreenshot":
+            raise RuntimeError("synthetic screenshot transport failure")
+        raise AssertionError(f"unexpected CDP method: {method}")
+
+    with pytest.raises(RuntimeError, match="synthetic screenshot transport failure"):
+        capture_masked(call, lambda expression: geometry, format="png")
+
+
+def test_mcp_inspection_reports_actual_mime_for_each_image(tmp_path, monkeypatch):
+    from reverie.control.mcp import MCPAdapter
+
+    raw = _encoded_image("PNG")
+    crop = _encoded_image("JPEG")
+
+    def rpc(self, browser_session, command, arguments, operation_id, *, epoch=None, observation_id=None):
+        return {"raw_frame": raw, "crop": crop}
+
+    monkeypatch.setattr(MCPAdapter, "_rpc", rpc)
+    result = MCPAdapter(root=tmp_path).call_tool("worker_inspect", {
+        "browser_session": "demo", "operation_id": "op1", "ref": "e1"})
+    images = [block for block in result["content"] if block.get("type") == "image"]
+    assert {block["data"]: block["mimeType"] for block in images} == {
+        raw: "image/png", crop: "image/jpeg"}
+
+
+def test_jpeg_conversion_failure_retains_painted_png(monkeypatch):
+    import base64
+    import io
+
+    from reverie.capture import capture_masked
+
+    source = io.BytesIO()
+    Image.new("RGB", (48, 48), (230, 0, 160)).save(source, format="PNG")
+    geometry = {"width": 48, "height": 48, "rects": [[5, 5, 25, 25, True]], "documents": []}
+
+    def call(method, **params):
+        if method == "DOM.getDocument":
+            return {"root": {"nodeId": 1, "children": []}}
+        if method == "Page.captureScreenshot":
+            return {"data": base64.b64encode(source.getvalue()).decode()}
+        raise AssertionError(f"unexpected CDP method: {method}")
+
+    original_save = Image.Image.save
+
+    def fail_jpeg(image, fp, format=None, **params):
+        if format and format.upper() in ("JPEG", "JPG"):
+            raise OSError("synthetic JPEG failure")
+        return original_save(image, fp, format=format, **params)
+
+    monkeypatch.setattr(Image.Image, "save", fail_jpeg)
+    encoded = capture_masked(call, lambda expression: geometry, format="jpeg")
+    with Image.open(io.BytesIO(base64.b64decode(encoded))) as image:
+        assert image.format == "PNG"
+        rgb = image.convert("RGB")
+        for x in range(8, 22):
+            for y in range(8, 22):
+                assert rgb.getpixel((x, y)) != (230, 0, 160)
+        assert rgb.getpixel((35, 35)) == (230, 0, 160)
+
+
+def test_invalid_selector_configuration_warns_without_exposing_value(monkeypatch, caplog):
+    from reverie.capture import secret_selectors
+
+    selector = "synthetic-private-invalid-selector-731"
+    monkeypatch.setenv("REVERIE_SECRET_SELECTORS", selector)
+    with caplog.at_level("WARNING"):
+        secret_selectors()
+    assert caplog.records
+    assert selector not in caplog.text
