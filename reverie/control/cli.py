@@ -571,6 +571,10 @@ def main(argv=None):
     p.add_argument("y", type=float)
     p.add_argument("--text", help="Stated value to type into a safe editable field")
 
+    p = sub.add_parser("visual-hover", help="Hover over a point in the latest screenshot (viewport CSS pixels)")
+    p.add_argument("x", type=float)
+    p.add_argument("y", type=float)
+
     p = sub.add_parser("hover", help="Move the pointer over an element (opens hover menus)")
     p.add_argument("ref", nargs="?")
     p.add_argument("--label")
@@ -924,6 +928,8 @@ def main(argv=None):
                                     "hint": args.hint, "value": args.value})
     elif command == "visual-act":
         result = call(name, "visual_act", {"x": args.x, "y": args.y, "text": args.text})
+    elif command == "visual-hover":
+        result = call(name, "visual_hover", {"x": args.x, "y": args.y})
     elif command == "hover":
         result = call(name, "hover", {"ref": args.ref, "label": args.label})
     elif command == "dialog":

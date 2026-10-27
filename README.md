@@ -116,6 +116,7 @@ Other ways to drive a session:
 - `suggest`, then `accept` or `reject --hint`: one step at a time.
 - `observe`, `act e5 --text ...`, `check --text ...`: direct control.
 - `expand REF`, then `bucket_back` or `bucket_root`: navigate large action groups without dropping controls.
+- `hover REF` or `visual-hover X Y`: open hover menus through guarded pointer movement without clicking.
 - `visual-act X Y`: use a fresh screenshot point for an unlisted control. Freshness, hit-test, intent, stated-value, and secret-entry guards still apply.
 
 Exit codes: 0 ok, 1 check failed, 2 refused, 3 error, 4 no session.

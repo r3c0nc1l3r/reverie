@@ -27,3 +27,7 @@ A visual action requires a successful screenshot whose page marker and full DOM 
 Password, hidden, file, disabled, and inert controls are refused. Visual clicks on labels are also refused because they can activate another field. Use the field itself. Text must be stated in the goal, plan, or notes. Commit actions need explicit intent. Read-only and avoid rules still apply. Password entry keeps its separate `secret` path.
 
 The synthetic [action bucket fixture](../examples/action-buckets/fixture.html) provides a large form for local exploration.
+
+## Hover menus
+
+Use `hover REF` for an observed clickable menu parent, or `visual-hover X Y` for a point in the latest screenshot. CLI coordinates are viewport CSS pixels. The pilot accepts `hover` and `visual_hover`; visual coordinates use its supplied image dimensions. Hover moves the pointer without clicking or typing. Freshness, hit-test, avoid-list, and control-ownership checks still apply. Protected controls, their ancestors, and labels linked to protected controls are refused.

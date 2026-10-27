@@ -260,7 +260,7 @@ class Browser:
                 return False
             node = action["node"]
             return self.evaluate(f"window.__jevFast?.guard(window.__jevFast.nodes.get({node}))") == action["point"]["guard"]
-        if action is not None and action["kind"] in {"click", "select"}:
+        if action is not None and action["kind"] in {"click", "select", "hover"}:
             node = action["node"]
             if type(node) is not int:
                 return False
@@ -332,7 +332,11 @@ def browser_operation(request):
                 state_check = visual_state_matches(state_key) if point else "true"
                 target = evaluate("""(action => {
               const e=window.__jevFast?.nodes.get(action.node);
-              if (!e?.isConnected || e.matches(':disabled') || e.closest('[aria-disabled="true"],[inert]') ||
+              const protectedControl=control => !!control && (
+                control.matches('input[type=password],input[type=file],input[type=hidden],:disabled') ||
+                !!control.closest('[aria-disabled="true"],[aria-hidden="true"],[inert]'));
+              if (!e?.isConnected || e.matches(':disabled') || e.closest('[aria-disabled="true"],[aria-hidden="true"],[inert]') ||
+                  (action.kind==='hover' && (protectedControl(e) || protectedControl(e.closest('label')?.control))) ||
                   !e.checkVisibility({checkOpacity:true,checkVisibilityCSS:true})) return null;
               if (action.kind==='fill' && (e.readOnly || e.getAttribute('aria-readonly')==='true')) return null;
               const r=e.getBoundingClientRect(), x=action.point?.x ?? r.x+r.width/2,
@@ -343,7 +347,11 @@ def browser_operation(request):
                   e.closest('[aria-hidden="true"]') || e.matches('input[type=password],input[type=file],input[type=hidden]') ||
                   e.closest('label')?.control?.matches('input[type=password],input[type=file],input[type=hidden]'))) return null;
               if (!r.width || !r.height || x<0 || y<0 || x>=innerWidth || y>=innerHeight) return null;
-              if (!e.contains(document.elementFromPoint(x,y))) return null;
+              const hit=document.elementFromPoint(x,y);
+              if (!hit || !e.contains(hit)) return null;
+              if (action.kind==='hover' && (
+                  hit.closest('input[type=password],input[type=file],input[type=hidden],:disabled,[aria-disabled="true"],[inert],[aria-hidden="true"]') ||
+                  protectedControl(hit.closest('label')?.control))) return null;
               if (action.kind==='select') {
                 if (e.tagName!=='SELECT') return null;
                 let option;
@@ -370,7 +378,9 @@ def browser_operation(request):
                     if kind == "select":
                         raise RuntimeError("Dropdown execution was not confirmed; inspect before retrying.")
                     raise StalePage("Target changed or is covered. Observe again.")
-                if kind != "select":
+                if kind == "hover":
+                    call("Input.dispatchMouseEvent", type="mouseMoved", x=target["x"], y=target["y"])
+                elif kind != "select":
                     x, y = target["x"], target["y"]
                     if not action.get("point"):
                         call("Input.dispatchMouseEvent", type="mouseMoved", x=x, y=y)

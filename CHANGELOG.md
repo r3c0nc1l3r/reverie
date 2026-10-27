@@ -18,11 +18,14 @@ entries by hand.
 * Add follow-along narration with a 350 ms playback boundary, one-operation supervision, requests, and human takeover.
 * Add explicit pinning, triage, and temporary evidence cleanup with durable result metadata.
 * Add a restricted Codex app-server pilot using an existing local sign-in.
+* Add guarded pilot hover and screenshot-coordinate hover, plus CLI `visual-hover`.
 * Keep all controls reachable through action buckets, and add guarded screenshot-coordinate actions for unlisted controls.
 * Expose coordination through CLI state/events, MCP tools, and portable agent plugins.
 
 ### Fixes and verification
 
+* Reuse valid unchanged screenshots for each step while refreshing pixels at review boundaries and rejecting stale evidence.
+* Protect hover hits and associated label controls, including disabled, hidden, and inert ancestors.
 * Reject missing or stale visual observations before a hosted visual decision.
 * Preserve decision-layer history and stated-value guards across the experimental engine.
 * Add focused adapter, screenshot freshness, and accepted-action history regression coverage.

@@ -48,6 +48,8 @@ The pilot sees the raw screen and an annotated targeting image at meaningful dec
 
 Rapidly changing geometry or animation can prevent a consistent screenshot and create a coordinator checkpoint. The pilot does not automatically retry screenshot freshness. After restoring visual evidence, run `observe`, inspect `checkpoints`, resolve the affected checkpoint with a factual note, and start `pilot` again. The resumed attempt keeps the earlier evidence and recovery history.
 
+At each step review boundary, Reverie refreshes screenshot pixels and verifies their observation binding. An unchanged valid image can be reused as evidence for the current step. Failed captures or a changed page block visual verification until a fresh observation succeeds.
+
 A functional check alone cannot establish a pass. Missing screenshots or unavailable visual review block verification. Serious visual findings make the step fail even when a workaround succeeds; cosmetic findings retain their severity. Unsupported or ambiguous custom widgets require a checkpoint rather than an invented target.
 
 ```bash

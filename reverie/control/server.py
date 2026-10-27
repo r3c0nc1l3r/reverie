@@ -161,6 +161,7 @@ COMMANDS = {
                               a.get("narration"), a.get("redact", False), "orchestrator", None, a.get("hint"),
                               a.get("value")),
     "visual_act": lambda s, a: s.visual_act(a.get("x"), a.get("y"), text=a.get("text")),
+    "visual_hover": lambda s, a: s.visual_hover(a.get("x"), a.get("y")),
     "hover": lambda s, a: s.hover(a.get("ref"), a.get("label")),
     "secret": lambda s, a: s.secret(a["value"], a.get("field")),
     "press": lambda s, a: s.press(a["key"]),

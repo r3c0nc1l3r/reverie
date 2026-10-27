@@ -51,6 +51,10 @@ Answer with JSON only, one operation:
 {"op": "visual_act", "x": <image x>, "y": <image y>, "text": "<optional stated value>"}
    (Use when a visible target has no usable element id. Give pixel coordinates in the annotated image (image 2 in visual-primary mode),
    using image_size in the context; the top left is 0,0. Only type stated values into safe fields.)
+{"op": "hover", "ref": "<observed element id>"}
+{"op": "visual_hover", "x": <image x>, "y": <image y>}
+   (Hover opens menus without clicking. Use visual_hover for a visible menu parent without an element id;
+   its coordinates use the same image as visual_act. Try hovering a menu parent before reporting no response.)
 {"op": "check", "text": "<text that must be on the page>", "absent": "<text that must not be>", "url": "<url part>",
    "link": "<visible link text>", "href": "<part the link's target must contain, e.g. token=>"}
    (a link check reads link targets without showing them; use it instead of opening source views)
@@ -118,7 +122,7 @@ Rules:
   a login page in an isolated tab does not mean the session expired.
 - Prefer the page you are on. Use tab_new with isolated true when a step says signed out or private window."""
 
-OPS = {"inspect", "wait", "finding", "dialogs", "back", "act", "visual_act", "do", "check", "tab_new", "tab", "goto", "mark", "admin", "ask", "lesson"}
+OPS = {"inspect", "wait", "finding", "dialogs", "back", "act", "visual_act", "hover", "visual_hover", "do", "check", "tab_new", "tab", "goto", "mark", "admin", "ask", "lesson"}
 
 
 def playbook_path():
@@ -269,7 +273,7 @@ def validate(output, session, image_size=None):
         if not host or not lesson:
             raise ValueError("A lesson needs a host and text")
         clean.update(host=host[:120], lesson=lesson[:400])
-    elif op == "visual_act":
+    elif op in {"visual_act", "visual_hover"}:
         x, y, text = output.get("x"), output.get("y"), output.get("text")
         page = session.page or {}
         width, height = page.get("w"), page.get("h")
@@ -279,9 +283,19 @@ def validate(output, session, image_size=None):
                 or width <= 0 or height <= 0 or image_width <= 0 or image_height <= 0
                 or not 0 <= x < image_width or not 0 <= y < image_height):
             raise ValueError("Visual action coordinates must be finite and inside the screenshot")
+        if op == "visual_hover" and text is not None:
+            raise ValueError("Hover does not take text")
         if text is not None and not isinstance(text, str):
             raise ValueError("Visual action text must be a string")
-        clean.update(x=x * width / image_width, y=y * height / image_height, text=text)
+        clean.update(x=x * width / image_width, y=y * height / image_height)
+        if op == "visual_act":
+            clean["text"] = text
+    elif op == "hover":
+        ref = str(output.get("ref") or "").lstrip("@")
+        action = next((a for a in (session.page or {}).get("actions", []) if a["id"] == ref), None)
+        if not action or action.get("kind") != "click":
+            raise ValueError("Hover requires an observed clickable element")
+        clean["ref"] = ref
     elif op == "act":
         ref = str(output.get("ref") or "").lstrip("@")
         action = next((a for a in (session.page or {}).get("actions", []) if a["id"] == ref), None)
@@ -377,7 +391,9 @@ Use high for anything that blocks or misleads a user, medium for clearly broken 
 
 def ui_review(session, step, files):
     """Multimodal review of a step's frames. Returns {"issues": [...], "summary": "..."} or None."""
-    if setting("REVERIE_UI_REVIEW", "1") == "0" or not files:
+    from ..settings import is_off
+
+    if is_off("REVERIE_UI_REVIEW", "1") or not files:
         return None
     import base64
     import io
@@ -385,16 +401,20 @@ def ui_review(session, step, files):
     from PIL import Image
 
     images = []
+    image_files = []
     for name in files[-5:]:
         try:
             image = Image.open(session.trail_dir / "frames" / name).convert("RGB")
         except OSError:
+            if name == files[-1]:
+                return None
             continue
         if image.width > 1280:
             image = image.resize((1280, round(image.height * 1280 / image.width)))
         out = io.BytesIO()
         image.save(out, format="JPEG", quality=70)
         images.append(base64.b64encode(out.getvalue()).decode())
+        image_files.append(name)
     if not images:
         return None
     context = {"test": (session.test or {}).get("title"), "step": step["title"], "images": len(images)}
@@ -414,7 +434,7 @@ def ui_review(session, step, files):
         index = issue.get("image") if isinstance(issue.get("image"), int) else len(images)
         index = min(max(index, 1), len(images))
         issues.append({"severity": issue["severity"], "affects_step": issue.get("affects_step") is not False, "what": str(issue.get("what") or "")[:300],
-                       "frame": files[-len(images):][index - 1]})
+                       "frame": image_files[index - 1]})
     return {"issues": issues, "summary": str(output.get("summary") or "")[:300]}
 
 
@@ -487,7 +507,7 @@ def choose(session, step, log):
                                            images=images,
                                           reasoning_effort=os.environ.get("TEXT_MODEL_EFFORT", "low"))
             try:
-                if isinstance(output, dict) and output.get("op") == "visual_act" and not shot:
+                if isinstance(output, dict) and output.get("op") in {"visual_act", "visual_hover"} and not shot:
                     raise ValueError("Visual action requires a screenshot")
                 return validate(output, session, image_size), meta
             except (ValueError, KeyError, TypeError) as error:

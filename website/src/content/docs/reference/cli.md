@@ -505,12 +505,13 @@ uv run reverie --session demo fill e4 --text "tomsmith"
 uv run reverie --session demo click --label "Login"
 ```
 
-### `hover`
+### `hover` and `visual-hover`
 
-Move the pointer over an element. Use it to open hover menus.
+Move the pointer over an observed element, or a point in a fresh screenshot, to open a hover menu. `visual-hover` uses viewport CSS pixels. The guarded executor refuses stale or protected targets and their associated label controls; no click or text input is sent.
 
 ```text
 reverie hover [--label LABEL] [ref]
+reverie visual-hover X Y
 ```
 
 ### `dialog`

@@ -43,3 +43,20 @@ def visual_act(session, x, y, text=None):
         finally:
             if session.page is page:
                 page["actions"] = original
+
+
+def visual_hover(session, x, y):
+    """Hover on a safe point in the latest fresh screenshot."""
+    from .session import SessionError
+
+    with session.lock:
+        page = session.page
+        if (not page or not getattr(session, "frame", None) or not getattr(session, "last_capture_ok", False)
+                or getattr(session, "_visual_frame_marker", None) != page.get("marker")
+                or page.get("marker") is None or not getattr(session, "_visual_frame_state", None)):
+            raise SessionError("A fresh screenshot is required. Observe again.")
+        try:
+            action = session.browser.observe_point(page, x, y, visual_state=session._visual_frame_state)
+        except ValueError as error:
+            raise SessionError(str(error)) from error
+        return session._hover_action(action)

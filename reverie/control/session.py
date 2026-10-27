@@ -325,6 +325,8 @@ class Session(CoordinatedSession):
         self._apply_bucket_path()
         self.render()
         self.capture()
+        if self.last_capture_ok:
+            self._review_observation_invalid = False
         try:
             self.open_tabs = self.browser.tabs()
         except (RuntimeError, TimeoutError):
@@ -418,9 +420,10 @@ class Session(CoordinatedSession):
 
     def save_frame(self, prefix):
         """Store the current frame beside the trail so the dashboard can replay a run. Best effort."""
-        if not self.frame:
+        if not self.frame or not getattr(self, "last_capture_ok", True):
             return None
         if self.frame == getattr(self, "last_saved_frame", None):
+            self.__dict__.setdefault("step_frames", []).append(self.last_saved_name)
             return self.last_saved_name  # Unchanged screen: reuse the frame so a replay shows only real changes.
         self.frame_seq = getattr(self, "frame_seq", 0) + 1
         name = f"{prefix}-{self.frame_seq:04d}.jpg"
@@ -1155,20 +1158,29 @@ class Session(CoordinatedSession):
             self.step_frames = []
         if status == "running" and step.get("admin"):
             self.checkpoint(step["title"], command=step.get("command"), step=n, source="plan")
-        frame = self.save_frame("mark") if status != "running" else None
-        if status in {"pass", "fail", "blocked"} and not step.get("admin"):
+        needs_review = status in {"pass", "fail", "blocked"} and not step.get("admin")
+        with self.lock:
+            frame = (self.save_frame("mark") if status != "running" and not needs_review
+                     and self._review_frame_current() else None)
+        if needs_review:
             review = self.review_ui(step)
-            if status == "pass":
-                findings = step.get("findings", []) + (review or {}).get("issues", [])
-                serious = [f for f in findings if f.get("severity") in {"high", "medium"} and f.get("affects_step", True)]
-                if serious:
-                    status = "fail"
-                    note = "; ".join(f["what"] for f in serious)
-                    step.update(status=status, note=note, diagnosis="visual")
-                elif getattr(self, "visual_mode", None) == "primary" and review is None:
-                    status = "blocked"
-                    note = "Visual verification unavailable; functional checks alone cannot establish a pass"
-                    step.update(status=status, note=note, diagnosis="visual-unverified")
+            with self.lock:
+                if review is not None and not self._review_binding_current(getattr(self, "_review_binding", None)):
+                    review = None
+                    step.pop("ui", None)
+                    self._review_observation_invalid = True
+                frame = getattr(self, "_review_frame_name", None) if review is not None else None
+                if status == "pass":
+                    findings = step.get("findings", []) + (review or {}).get("issues", [])
+                    serious = [f for f in findings if f.get("severity") in {"high", "medium"} and f.get("affects_step", True)]
+                    if serious:
+                        status = "fail"
+                        note = "; ".join(f["what"] for f in serious)
+                        step.update(status=status, note=note, diagnosis="visual")
+                    elif getattr(self, "visual_mode", None) == "primary" and review is None:
+                        status = "blocked"
+                        note = "Visual verification unavailable; functional checks alone cannot establish a pass"
+                        step.update(status=status, note=note, diagnosis="visual-unverified")
         if status == "pass" and not step.get("admin") and getattr(self, "visual_mode", None) == "primary":
             checks = self.checks[step.get("checks_from", 0):]
             if not checks or not checks[-1]["passed"]:
@@ -1196,19 +1208,81 @@ class Session(CoordinatedSession):
             self.say(f"{self.test['title']} result: {self.test['result']}", speak=False)
         return {"test": self.test}
 
+    def _review_frame_current(self):
+        """Require the captured frame to match the current page at the review boundary."""
+        page = self.page or {}
+        marker = page.get("marker")
+        state = getattr(self, "_visual_frame_state", None)
+        if (getattr(self, "_review_observation_invalid", False)
+                or not getattr(self, "last_capture_ok", False) or not getattr(self, "frame", None)
+                or marker is None or getattr(self, "_visual_frame_marker", None) != marker or not state):
+            return False
+        try:
+            return self.browser.evaluate(MARKER) == marker and self.browser.visual_state() == state
+        except Exception:
+            return False
+
+    def _review_identity(self):
+        control = None
+        if getattr(self, "coordination", None):
+            current = self.coordination.worker_control(self.worker_id)
+            control = (current.get("owner"), current.get("epoch"))
+        return ((getattr(self, "observation", None) or {}).get("id"),
+                getattr(self, "scope_revision", None), control, getattr(self, "_pause_requested", False))
+
+    def _review_binding_current(self, binding):
+        try:
+            return (binding is not None and self._review_identity() == binding[0]
+                    and self.frame == binding[1] and self._visual_frame_state == binding[2]
+                    and self._review_frame_name == binding[3] and self._review_frame_current())
+        except Exception:
+            return False
+
     def review_ui(self, step):
         """Multimodal UI review of the frames this step produced; findings stay on the step and in the trail."""
         from .pilot import ui_review
 
-        files = list(dict.fromkeys(getattr(self, "step_frames", [])))
+        with self.lock:
+            self._review_frame_name = None
+            self._review_binding = None
+            step.pop("ui", None)
+            if not self._review_frame_current():
+                self.last_capture_ok = False
+                self._review_observation_invalid = True
+                return None
+            state = self._visual_frame_state
+            self.capture()
+            if self._visual_frame_state != state or not self._review_frame_current():
+                self.last_capture_ok = False
+                self._review_observation_invalid = True
+                return None
+            self._review_frame_name = self.save_frame("mark")
+            if not self._review_frame_name:
+                return None
+            try:
+                binding = (self._review_identity(), self.frame, state, self._review_frame_name)
+            except Exception:
+                self._review_observation_invalid = True
+                return None
+            # Keep the last occurrence so a reused final frame remains the final review image.
+            files = list(reversed(dict.fromkeys(reversed(self.step_frames))))
         if len(files) > 5:  # Spread the sample over the step, always keeping the final screen.
             stride = len(files) / 4
             files = [files[int(i * stride)] for i in range(4)] + [files[-1]]
         review = ui_review(self, step, files)
         if review is None:
             return None
-        step["ui"] = review
-        self.log("ui_review", step=step["n"], **review)
+        with self.lock:
+            if not self._review_binding_current(binding):
+                self._review_observation_invalid = True
+                return None
+            self.capture()
+            if not self._review_binding_current(binding):
+                self._review_observation_invalid = True
+                return None
+            self._review_binding = binding
+            step["ui"] = review
+            self.log("ui_review", step=step["n"], **review)
         worst = next((s for s in ("high", "medium", "low") if any(i["severity"] == s for i in review["issues"])), None)
         self.say(f"UI review, step {step['n']}: " + (f"{len(review['issues'])} issue(s), worst {worst}. "
                  if worst else "no problems. ") + review["summary"], speak=False)
@@ -1493,23 +1567,39 @@ class Session(CoordinatedSession):
         return visual_act(self, x, y, text=text)
 
     @browser_operation
+    def visual_hover(self, x, y):
+        """Hover over a point in the latest screenshot, in viewport CSS pixels."""
+        from .visual import visual_hover
+
+        return visual_hover(self, x, y)
+
+    @browser_operation
     def hover(self, ref=None, label=None):
-        """Move the pointer over an observed element (opens hover menus). No click, no input."""
+        """Move the pointer over an observed element without clicking or typing."""
         with self.lock:
             action = self.resolve(ref, label, "click")
-            rect = action.get("rect")
-            if not rect:
-                raise SessionError(f"{action['id']} has no position to hover")
-            self.say(f"Hovering over {action.get('label', 'element')}", highlight=rect, speak=False)
-            x, y = rect["x"] + rect["w"] / 2, rect["y"] + rect["h"] / 2
-            self.browser.call("Input.dispatchMouseEvent", type="mouseMoved", x=x, y=y)
-            time.sleep(0.4)
-            step = {"step": len(self.history) + 1, "id": action["id"], "kind": "hover",
-                    "label": action.get("label"), "text": None, "url": self.page["url"], "by": "orchestrator"}
-            self.history.append(step)
-            self.log("act", **step)
+            return self._hover_action(action)
+
+    def _hover_action(self, action):
+        if any(a and a.lower() in (action.get("label") or "").lower() for a in getattr(self, "avoid", [])):
+            raise SessionError("The target is on the avoid list. Nothing executed.")
+        if not action.get("rect"):
+            raise SessionError(f"{action['id']} has no position to hover")
+        page = self.page
+        self.say(f"Hovering over {action.get('label', 'element')}", highlight=action["rect"], speak=False)
+        try:
+            self.browser.act({**action, "kind": "hover"}, page)
+        except StalePage as error:
             self.observe()
-            return {**step, **self.summary()}
+            raise SessionError(f"{error} Nothing was executed; observe and choose again.") from error
+        time.sleep(0.4)
+        step = {"step": len(self.history) + 1, "id": action["id"], "kind": "hover",
+                "label": action.get("label"), "text": None, "url": page["url"],
+                "by": getattr(self._command_local, "actor", None) or "orchestrator"}
+        self.history.append(step)
+        self.log("act", **step)
+        self.observe()
+        return {**step, **self.summary()}
 
     @browser_operation
     def cmd_dialog(self, accept=True, text=None):
@@ -2037,6 +2127,12 @@ class Session(CoordinatedSession):
                 return (f"stack ran: {ran}. Paused: {result['paused']}; now at {result['url']}"
                         + (f"; unexecuted proposal: {pending}" if pending else "")
                         + (f"; stack says: {why}" if why else ""))
+            if kind == "hover":
+                result = self.hover(op["ref"])
+                return f"pilot hovered {result.get('label')}; now at {result.get('url')}"
+            if kind == "visual_hover":
+                result = self.visual_hover(op["x"], op["y"])
+                return f"pilot hovered {result.get('label')}; now at {result.get('url')}"
             if kind == "visual_act":
                 result = self.visual_act(op["x"], op["y"], text=op.get("text"))
                 return f"pilot {result['kind']} {result.get('label')}; now at {result.get('url_after')}"
