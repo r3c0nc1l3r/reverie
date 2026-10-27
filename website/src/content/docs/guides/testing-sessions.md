@@ -49,6 +49,8 @@ Pause is requested immediately; an action already executing finishes at its safe
 
 The pilot sees the raw screen and an annotated targeting image at meaningful decisions. `inspect` supplies native-size crops and loading diagnostics. DOM references identify and guard a target; the pilot must judge whether the rendered control is perceivable and usable. Delegated intents prepare guarded proposals; the pilot approves the target against the next screenshot before acting. Offscreen targets are revealed first, then chosen again visually.
 
+Rapidly changing geometry or animation can prevent a consistent screenshot and create a coordinator checkpoint. The pilot does not automatically retry screenshot freshness. After restoring visual evidence, run `observe`, inspect `checkpoints`, resolve the affected checkpoint with a factual note, and start `pilot` again. The resumed attempt keeps the earlier evidence and recovery history.
+
 A functional check alone cannot establish a pass. Missing screenshots or unavailable visual review block verification. Serious visual findings make the step fail even when a workaround succeeds; cosmetic findings retain their severity. Unsupported or ambiguous custom widgets require a checkpoint rather than an invented target.
 
 ```bash
