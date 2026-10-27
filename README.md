@@ -167,6 +167,8 @@ Screenshot masking is **best effort, not a guarantee**. Unsupported fields and m
 
 Reverie attempts field-local opaque stripes on populated password, OTP, authentication-code and tracked sensitive fields. Empty native fields keep placeholders and borders visible; filled borders remain visible where practical. Matching uses exact values or Unicode NFKC equality, with no numeric-substring matching or stale-target fan-out. `REVERIE_SECRET_SELECTORS` accepts a trusted JSON array for form or text fields. Invalid entries and masking faults produce sanitized warnings while keeping the fresh capture when possible. Masks do not establish hidden values or controls. Existing frames, clips and in-flight images are not recalled. See [configuration and limits](docs/screenshot-privacy.md).
 
+UI review uses verified images produced by the session’s capture pipeline. Altered, missing or unregistered final evidence requires a fresh capture or a declined review. Provenance does not change the best-effort masking limits.
+
 ## Downloads
 
 Files that the browser downloads go to a folder that Reverie controls. They never go to `~/Downloads`.

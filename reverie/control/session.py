@@ -10,6 +10,7 @@ import json
 import logging
 import os
 import re
+import stat
 import threading
 import time
 import uuid
@@ -89,6 +90,10 @@ and entered the TOTP code. Everything looks good here; I didn't notice any error
 they accomplished; never list individual clicks or element ids, and never repeat typed secrets. Mention an
 error only if error_words_on_page is non-empty or a check failed. Reflect the outcome if given
 (pass/fail/blocked). Answer with JSON only: {"summary": "..."}"""
+
+
+class FrameExists(OSError):
+    """An exclusive frame name is already occupied."""
 
 
 class SessionError(ValueError):
@@ -326,6 +331,10 @@ class Session(CoordinatedSession):
             self._prepare_model_root(self._model_limit)
         self._apply_bucket_path()
         self.render()
+        try:
+            self._observation_review_state = self.browser.visual_state()
+        except Exception:
+            self._observation_review_state = None
         self.capture()
         if self.last_capture_ok:
             self._review_observation_invalid = False
@@ -420,23 +429,128 @@ class Session(CoordinatedSession):
         self._apply_bucket_path()
         return {**self.summary(), "kind": "expand", "items": self.elements(limit=250)}
 
-    def save_frame(self, prefix):
-        """Store the current frame beside the trail so the dashboard can replay a run. Best effort."""
-        if not self.frame or not getattr(self, "last_capture_ok", True):
+    def _frame_directory(self):
+        """Open the session's frames directory without following a final symlink."""
+        directory = self.trail_dir / "frames"
+        directory.mkdir(exist_ok=True)
+        return os.open(directory, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+
+    @staticmethod
+    def _frame_name(name):
+        return (isinstance(name, str) and name not in {"", ".", ".."}
+                and Path(name).name == name and "/" not in name and "\\" not in name)
+
+    def _verified_frame(self, name):
+        """Read only a registered, unchanged regular file in this session's frames directory."""
+        expected = self.__dict__.get("_frame_hashes", {}).get(name) if self._frame_name(name) else None
+        if not expected:
             return None
-        if self.frame == getattr(self, "last_saved_frame", None):
-            self.__dict__.setdefault("step_frames", []).append(self.last_saved_name)
-            return self.last_saved_name  # Unchanged screen: reuse the frame so a replay shows only real changes.
-        self.frame_seq = getattr(self, "frame_seq", 0) + 1
-        name = f"{prefix}-{self.frame_seq:04d}.jpg"
         try:
-            (self.trail_dir / "frames").mkdir(exist_ok=True)
-            (self.trail_dir / "frames" / name).write_bytes(base64.b64decode(self.frame))
+            directory = self._frame_directory()
+            try:
+                fd = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=directory)
+                try:
+                    if not stat.S_ISREG(os.fstat(fd).st_mode):
+                        return None
+                    with os.fdopen(fd, "rb") as source:
+                        fd = -1
+                        data = source.read()
+                finally:
+                    if fd != -1:
+                        os.close(fd)
+            finally:
+                os.close(directory)
         except OSError:
             return None
-        self.last_saved_frame, self.last_saved_name = self.frame, name
-        self.__dict__.setdefault("step_frames", []).append(name)
-        return name
+        return data if hashlib.sha256(data).hexdigest() == expected else None
+
+    def _write_frame(self, name, data):
+        """Publish a complete capture once and register its content digest."""
+        if not self._frame_name(name):
+            raise ValueError("Invalid frame name")
+        with self.lock:
+            if name in self.__dict__.get("_frame_hashes", {}):
+                raise FrameExists(name)
+            directory = self._frame_directory()
+            temporary = f".capture-{uuid.uuid4().hex}.tmp"
+            created = False
+            try:
+                fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+                             0o600, dir_fd=directory)
+                created = True
+                try:
+                    with os.fdopen(fd, "wb") as output:
+                        fd = -1
+                        output.write(data)
+                finally:
+                    if fd != -1:
+                        os.close(fd)
+                try:
+                    os.link(temporary, name, src_dir_fd=directory, dst_dir_fd=directory, follow_symlinks=False)
+                except FileExistsError as error:
+                    raise FrameExists(name) from error
+                self.__dict__.setdefault("_frame_hashes", {})[name] = hashlib.sha256(data).hexdigest()
+            finally:
+                try:
+                    if created:
+                        os.unlink(temporary, dir_fd=directory)
+                except FileNotFoundError:
+                    pass
+                finally:
+                    os.close(directory)
+
+    def save_frame(self, prefix):
+        """Store capture output for replay; reuse only an intact registered frame."""
+        with self.lock:
+            if not self.frame or not getattr(self, "last_capture_ok", True):
+                return None
+            try:
+                data = base64.b64decode(self.frame, validate=True)
+                if (self.frame == getattr(self, "last_saved_frame", None)
+                        and self._verified_frame(getattr(self, "last_saved_name", None)) == data):
+                    self.__dict__.setdefault("step_frames", []).append(self.last_saved_name)
+                    return self.last_saved_name
+                while True:
+                    self.frame_seq = getattr(self, "frame_seq", 0) + 1
+                    name = f"{prefix}-{self.frame_seq:04d}.jpg"
+                    try:
+                        self._write_frame(name, data)
+                        break
+                    except FrameExists:
+                        continue
+            except (OSError, ValueError):
+                return None
+            self.last_saved_frame, self.last_saved_name = self.frame, name
+            self.__dict__.setdefault("step_frames", []).append(name)
+            return name
+
+    def review_frames(self, files):
+        """Return (name, bytes) for verified capture files, or capture a fresh fallback.
+
+        Provenance confirms the capture pipeline, whose field masking is best effort;
+        it does not guarantee that every secret is masked. Legacy and altered files
+        are never read as review evidence.
+        """
+        with self.lock:
+            # After an actual capture failure, old frames cannot represent the final
+            # screen. Retry once and review only the fresh result if it succeeds.
+            if getattr(self, "last_capture_ok", True):
+                frames = []
+                for name in files[-5:]:
+                    data = self._verified_frame(name)
+                    if data is not None:
+                        frames.append((name, data))
+                if frames and files and frames[-1][0] == files[-1]:
+                    return frames
+            # A bound review must never change its final image after binding.
+            if getattr(self, "_review_frame_name", None):
+                return []
+            self.capture()
+            if not getattr(self, "last_capture_ok", False):
+                return []
+            name = self.save_frame("review")
+            data = self._verified_frame(name)
+            return [(name, data)] if data is not None else []
 
     def keep_frame(self):
         done = len(self.history)
@@ -480,7 +594,7 @@ class Session(CoordinatedSession):
                     and visual_before is not None and visual_before == visual_after):
                 self._visual_frame_marker = marker
                 self._visual_frame_state = visual_before
-            self.last_capture_ok = bool(self.frame) and (marker is None or self._visual_frame_marker is not None)
+            self.last_capture_ok = bool(self.frame)
         except Exception:
             self.frame = None
             self.last_saved_frame = None
@@ -1250,7 +1364,8 @@ class Session(CoordinatedSession):
         try:
             return (binding is not None and self._review_identity() == binding[0]
                     and self.frame == binding[1] and self._visual_frame_state == binding[2]
-                    and self._review_frame_name == binding[3] and self._review_frame_current())
+                    and self._review_frame_name == binding[3] and self._review_frame_current()
+                    and self._verified_frame(binding[3]) == base64.b64decode(binding[1], validate=True))
         except Exception:
             return False
 
@@ -1262,14 +1377,19 @@ class Session(CoordinatedSession):
             self._review_frame_name = None
             self._review_binding = None
             step.pop("ui", None)
+            observed_state = getattr(self, "_observation_review_state", None)
             if not self._review_frame_current():
-                self.last_capture_ok = False
+                if (getattr(self, "_visual_frame_state", None) is not None or observed_state is None
+                        or getattr(self, "_review_observation_invalid", False)):
+                    self._review_observation_invalid = True
+                    return None
+                self.capture()
+            if not self._review_frame_current() or self._visual_frame_state != observed_state:
                 self._review_observation_invalid = True
                 return None
             state = self._visual_frame_state
             self.capture()
             if self._visual_frame_state != state or not self._review_frame_current():
-                self.last_capture_ok = False
                 self._review_observation_invalid = True
                 return None
             self._review_frame_name = self.save_frame("mark")
@@ -1525,6 +1645,7 @@ class Session(CoordinatedSession):
             self.frame_id = None
             self._visual_frame_marker = None
             self._visual_frame_state = None
+            self._observation_review_state = None
             if self.page:
                 self.page.pop("screenshot", None)
 
@@ -1859,7 +1980,14 @@ class Session(CoordinatedSession):
                 raise
             target = Path(path) if path else self.trail_dir / f"{time.strftime('%H%M%S')}-{len(self.history):03d}.png"
             target.parent.mkdir(parents=True, exist_ok=True)
-            target.write_bytes(base64.b64decode(data))
+            image = base64.b64decode(data, validate=True)
+            if os.path.abspath(target.parent) == os.path.abspath(self.trail_dir / "frames"):
+                try:
+                    self._write_frame(target.name, image)
+                except FrameExists:
+                    raise SessionError("Frame name already exists; choose a new screenshot path.") from None
+            else:
+                target.write_bytes(image)
             self.log("screenshot", path=str(target))
             return {"path": str(target)}
 

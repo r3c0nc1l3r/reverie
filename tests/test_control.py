@@ -569,13 +569,13 @@ def test_ui_review_attaches_issues_to_the_marked_step(tmp_path, monkeypatch):
     buffer = io.BytesIO()
     Image.new("RGB", (40, 30), "white").save(buffer, format="JPEG")
     s.frame = base64.b64encode(buffer.getvalue()).decode()
-    s.last_capture_ok = True
     s.page["marker"] = "marker-1"
-    s._visual_frame_marker = "marker-1"
-    s._visual_frame_state = "signature-1"
+    s.browser.observe.return_value = s.page
     s.browser.evaluate.return_value = "marker-1"
     s.browser.visual_state.return_value = "signature-1"
-    s.capture = lambda: None
+    s.browser.capture_masked.return_value = s.frame
+    Session.observe(s)
+    s.observe = lambda settle=False: Session.observe(s, settle=settle)
     s.plan("T", ["Open the page"])
     s.mark(1, "running")
     s.save_frame("step")

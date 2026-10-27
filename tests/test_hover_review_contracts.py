@@ -20,14 +20,15 @@ def _frame(color="white"):
 def _review_session(tmp_path):
     s = session(tmp_path)
     s.recap_model = False
-    s.frame = _frame()
-    s.last_capture_ok = True
+    from reverie.control.session import Session
+
     s.page["marker"] = "marker-1"
-    s._visual_frame_marker = "marker-1"
-    s._visual_frame_state = "signature-1"
+    s.browser.observe.return_value = s.page
     s.browser.evaluate.return_value = "marker-1"
     s.browser.visual_state.return_value = "signature-1"
-    s.capture = lambda: None  # Preserve the current capture DTO unless a test changes it.
+    s.browser.capture_masked.return_value = _frame()
+    Session.observe(s)
+    s.observe = lambda settle=False: Session.observe(s, settle=settle)
     s.plan("Review", ["First step", "Second step"])
     return s
 
@@ -64,7 +65,8 @@ def test_failed_capture_does_not_review_previous_step_frame(tmp_path, monkeypatc
     s.mark(1, "pass", "done")
     s.mark(2, "running")
     s.checks = [{"passed": True}]
-    s.last_capture_ok = False
+    s.browser.capture_masked.side_effect = RuntimeError("synthetic capture failure")
+    s.capture()
     s.save_frame("step")
     try:
         s.mark(2, "pass", "done")
@@ -102,21 +104,12 @@ def test_review_refreshes_pixels_when_dom_is_unchanged(tmp_path, monkeypatch):
     monkeypatch.setattr(model, "chat_json", lambda system, context, **kw: (
         seen.extend(kw["images"]) or {"issues": [], "summary": "clear"}, {}))
     s = _review_session(tmp_path)
-    new_frame = _frame("black")
-    captures = []
-
-    def capture():
-        captures.append(True)
-        s.frame = new_frame
-        s.last_capture_ok = True
-        s._visual_frame_marker = "marker-1"
-        s._visual_frame_state = "signature-1"
-
-    s.capture = capture
     s.mark(1, "running")
     s.save_frame("step")
+    s.browser.capture_masked.return_value = _frame("black")
+    s.browser.capture_masked.reset_mock()
     s.mark(1, "pass", "done")
-    assert captures
+    assert s.browser.capture_masked.called
     assert seen
     with Image.open(io.BytesIO(base64.b64decode(seen[-1]))) as reviewed:
         assert max(reviewed.convert("RGB").getpixel((20, 15))) < 20
@@ -153,20 +146,23 @@ def test_change_during_model_review_cannot_pass_or_accept_result(tmp_path, monke
 
 
 @pytest.mark.parametrize("final_kind", ["missing", "unreadable"])
-def test_ui_review_rejects_invalid_final_frame_without_fallback(tmp_path, monkeypatch, final_kind):
+def test_ui_review_refreshes_invalid_final_frame(tmp_path, monkeypatch, final_kind):
     monkeypatch.setenv("REVERIE_UI_REVIEW", "on")
     calls = []
     monkeypatch.setattr(model, "chat_json", lambda *args, **kwargs: (
         calls.append(kwargs) or {"issues": [], "summary": "clear"}, {}))
     s = _review_session(tmp_path)
     frames = tmp_path / "frames"
-    frames.mkdir()
-    (frames / "earlier.jpg").write_bytes(base64.b64decode(_frame()))
+    frames.mkdir(exist_ok=True)
+    earlier = s.save_frame("step")
     if final_kind == "unreadable":
         (frames / "final.jpg").write_bytes(b"not an image")
-    result = pilot.ui_review(s, s.test["steps"][0], ["earlier.jpg", "final.jpg"])
-    assert result is None
-    assert calls == []
+    s.browser.capture_masked.return_value = _frame("black")
+    result = pilot.ui_review(s, s.test["steps"][0], [earlier, "final.jpg"])
+    assert result is not None
+    assert calls and calls[-1]
+    with Image.open(io.BytesIO(base64.b64decode(calls[-1]["images"][-1]))) as reviewed:
+        assert max(reviewed.convert("RGB").getpixel((20, 15))) < 20
 
 
 @pytest.mark.parametrize("canonical,alias,expected", [

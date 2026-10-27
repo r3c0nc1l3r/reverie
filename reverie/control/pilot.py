@@ -397,7 +397,7 @@ def ui_review(session, step, files):
     """Multimodal review of a step's frames. Returns {"issues": [...], "summary": "..."} or None."""
     from ..settings import is_off
 
-    if is_off("REVERIE_UI_REVIEW", "1") or not files:
+    if is_off("REVERIE_UI_REVIEW", "1"):
         return None
     import base64
     import io
@@ -406,11 +406,13 @@ def ui_review(session, step, files):
 
     images = []
     image_files = []
-    for name in files[-5:]:
+    frames = session.review_frames(files)
+    for name, data in frames:
         try:
-            image = Image.open(session.trail_dir / "frames" / name).convert("RGB")
-        except OSError:
-            if name == files[-1]:
+            with Image.open(io.BytesIO(data)) as source:
+                image = source.convert("RGB")
+        except (OSError, ValueError):
+            if name == frames[-1][0]:
                 return None
             continue
         if image.width > 1280:

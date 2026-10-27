@@ -25,6 +25,9 @@ entries by hand.
 
 ### Fixes and verification
 
+* Review verified capture-produced frames, preserve immutable evidence with atomic writes, and reject stale final review results.
+* Preserve fresh capture availability during animation while retaining action and coordinate checks.
+
 * Keep fresh captures on masking faults with sanitized warnings; remove whole-frame fallback, numeric-substring matching and stale-target fan-out. Detect PNG fallback MIME in model inputs, MCP and viewers.
 * Preserve empty-field placeholders and safe borders, identify privacy masks with opaque stripes, and acquire PNG pixels before masking to avoid JPEG bleed.
 * Reuse valid unchanged screenshots for each step while refreshing pixels at review boundaries and rejecting stale evidence.

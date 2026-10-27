@@ -64,6 +64,8 @@ The JSON state includes logical session, run, worker, incarnation, observation, 
 
 Masking is **best effort, not a guarantee**. Unsupported fields and masking faults can leave content visible. Do not use real secrets without your own review. Recognized populated fields receive local stripes; empty fields keep placeholders and borders. Invalid selectors and masking faults warn while keeping fresh captures where possible. No whole-frame fallback, numeric-substring matching or stale-target fan-out is used. Existing evidence is not rewritten. See [screenshot privacy](screenshot-privacy.md) for configuration and limits.
 
+UI review uses verified capture-produced images. Invalid final evidence requires fresh capture or a declined review. Capture provenance does not guarantee that all sensitive content is hidden.
+
 ## Temporary evidence
 
 Purpose (`smoke`, `regression`, `exploratory`), result, diagnosis, and lifetime are independent fields. New sessions are temporary unless created with `--retained`.

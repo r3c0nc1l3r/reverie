@@ -31,3 +31,11 @@ The capture boundary acquires lossless PNG pixels before masking to avoid pre-ma
 Registration clears cached images and pending review-frame references. Existing saved frames and clips are not rewritten or recalled. Review historical evidence separately before sharing it. Already prepared or in-flight images cannot be recalled.
 
 Standalone Agent callers must serialize sensitive-value registration with model operations. Capture and image handoff are not atomic with compositor or registration changes. Screenshot masking does not guarantee secrecy, and structured observations and text logs follow separate handling rules.
+
+## Images used for UI review
+
+UI review uses bytes registered by this session’s capture pipeline and verifies that saved files are unchanged. Unregistered legacy files, altered files and symlinks are not model review evidence. Missing or invalid final evidence requires a fresh capture or a declined review; earlier images cannot substitute for a failed final capture. Review results are rejected if the observation or control state changes during model processing.
+
+This provenance check does not prove that every secret was masked. The best-effort policy and need for personal review still apply. Historical files remain available for human replay and are not retroactively sanitized.
+
+Frames saved as evidence are immutable. Choose an unused filename when exporting a screenshot directly into a run’s frames directory. Normal screenshot exports outside that directory keep their ordinary overwrite behavior.
