@@ -48,6 +48,16 @@ The pilot sees the raw screen and an annotated targeting image at meaningful dec
 
 Rapidly changing geometry or animation can prevent a consistent screenshot and create a coordinator checkpoint. The pilot does not automatically retry screenshot freshness. After restoring visual evidence, run `observe`, inspect `checkpoints`, resolve the affected checkpoint with a factual note, and start `pilot` again. The resumed attempt keeps the earlier evidence and recovery history.
 
+A step marked `blocked` can end the plan without creating a checkpoint. Inspect `progress --json` and the step note. Correct the capture, model configuration or application issue that prevented review, then take a fresh observation. Reset the affected step to `pending` and run the pilot again:
+
+```bash
+reverie --session admin observe
+reverie --session admin mark 1 pending --note "Retry after correcting the visual-review issue"
+reverie --session admin pilot
+```
+
+Use the actual step number from `progress`. Resetting clears that step’s earlier findings; its trail history remains. The pilot can retest the pending step. A pass requires a new functional check and an available visual review. Review the new verdict. A blocked step is not a checkpoint to `resolve`; use `resolve` only when `checkpoints` lists an affected checkpoint.
+
 At each step review boundary, Reverie refreshes screenshot pixels and verifies their observation binding. An unchanged valid image can be reused as evidence for the current step. Failed captures or a changed page block visual verification until a fresh observation succeeds.
 
 A functional check alone cannot establish a pass. Missing screenshots or unavailable visual review block verification. Serious visual findings make the step fail even when a workaround succeeds; cosmetic findings retain their severity. Unsupported or ambiguous custom widgets require a checkpoint rather than an invented target.
