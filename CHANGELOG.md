@@ -22,6 +22,8 @@ entries by hand.
 * Keep all controls reachable through action buckets, and add guarded screenshot-coordinate actions for unlisted controls.
 * Expose coordination through CLI state/events, MCP tools, and portable agent plugins.
 
+* Mask sensitive fields and trusted private regions at the shared screenshot boundary; add `REVERIE_SECRET_SELECTORS`.
+
 ### Fixes and verification
 
 * Reuse valid unchanged screenshots for each step while refreshing pixels at review boundaries and rejecting stale evidence.

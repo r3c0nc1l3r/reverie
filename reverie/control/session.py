@@ -239,6 +239,7 @@ class Session(CoordinatedSession):
         self.download_dir.mkdir(parents=True, exist_ok=True)
         self.init_coordination(testing_session_id, project_root, follow_along, padding_ms)
         self.browser = HeadedBrowser(url, prepare=self.apply_download_dir)
+        self.browser.on_secret_registered = self._invalidate_secret_frames
         self.page = None
         self.observe(settle=True)
         self.status = "ready"
@@ -462,8 +463,7 @@ class Session(CoordinatedSession):
             marker = (self.page or {}).get("marker")
             before = self.browser.evaluate(MARKER) if marker is not None else None
             visual_before = self.browser.visual_state() if marker is not None else None
-            self.frame = self.browser.call("Page.captureScreenshot", format="jpeg", quality=85,
-                                           _response_timeout=4)["data"]
+            self.frame = self.browser.capture_masked(format="jpeg", quality=85, _response_timeout=4)
             self.frame_captured_at = time.time()
             self.frame_id = hashlib.sha256(self.frame.encode()).hexdigest()[:20]
             after = self.browser.evaluate(MARKER) if marker is not None else None
@@ -474,7 +474,11 @@ class Session(CoordinatedSession):
                 self._visual_frame_state = visual_before
             self.last_capture_ok = bool(self.frame) and (marker is None or self._visual_frame_marker is not None)
         except Exception:
-            pass
+            self.frame = None
+            self.last_saved_frame = None
+            self.browser.last_screenshot = None
+            if self.page:
+                self.page.pop("screenshot", None)
         finally:
             try:
                 self.browser.call("Runtime.evaluate", expression=f"{toggle}('')", _response_timeout=2)
@@ -1007,6 +1011,10 @@ class Session(CoordinatedSession):
                                 if r["id"] == cp["request_id"]), None)
                 if request and request["status"] != "resolved":
                     self.coordination.resolve_request(cp["request_id"], {"status": status, "note": note})
+            for answer in (output, note):
+                self.register_secret(answer)
+                for token in re.findall(r"[A-Za-z0-9_-]{4,}", answer or ""):
+                    self.register_secret(token)
             cp.update(status=status, resolved=time.strftime("%H:%M:%S"),
                       result={"exit_code": exit_code, "output": (output or "")[-2000:], "note": note})
             self.log("resolve", id=checkpoint_id, status=status, exit_code=exit_code, note=note)
@@ -1489,6 +1497,29 @@ class Session(CoordinatedSession):
             return f"Opening {label}"
         return f"Clicking {label}"
 
+    def register_secret(self, value=None, node=None, point=None):
+        """Invalidate prior images when a value or field becomes sensitive."""
+        if not value and node is None and point is None:
+            return
+        self._invalidate_secret_frames()
+        self.browser.register_secret(value, node, point)
+
+    def _invalidate_secret_frames(self):
+        with self.lock:
+            self.frame = None
+            self.last_capture_ok = False
+            self.last_saved_frame = None
+            self.last_saved_name = None
+            self.step_frames = []
+            self._review_frame_name = None
+            self._review_binding = None
+            self._review_observation_invalid = True
+            self.frame_id = None
+            self._visual_frame_marker = None
+            self._visual_frame_state = None
+            if self.page:
+                self.page.pop("screenshot", None)
+
     @browser_operation
     def act(self, ref=None, label=None, kind=None, text=None, option=None, narration=None, redact=False,
             by="orchestrator", escalation=None, hint=None, value=None):
@@ -1520,6 +1551,10 @@ class Session(CoordinatedSession):
                 raise SessionError(f"{action['id']} is a text field; pass the text to type")
             if action["kind"] != "fill" and text is not None:
                 raise SessionError(f"{action['id']} is a {action['kind']} target; it does not take text")
+            if action["kind"] == "fill" and (redact or self.browser.secret_matches(text)):
+                if type(action.get("node")) is not int:
+                    raise SessionError("Sensitive target could not be tracked; action withheld.")
+                self.register_secret(text, action["node"])
             page = self.page
             self.status = "acting"
             self.say(narration or self.phrase(action, text, secret=redact), highlight=action.get("rect"), speak=False)
@@ -1622,6 +1657,7 @@ class Session(CoordinatedSession):
             if not target or target.get("count") != 1 or "x" not in target:
                 count = (target or {}).get("count", 0)
                 raise SessionError(f"Expected one visible, uncovered password field, found {count}")
+            self.register_secret(value, point=[target["x"], target["y"]])
             self.status = "acting"
             self.say(f"Entering the {field or 'password'} secret", highlight=target["rect"], speak=False)
             x, y = target["x"], target["y"]
@@ -1804,7 +1840,15 @@ class Session(CoordinatedSession):
 
     def screenshot(self, path=None):
         with self.lock:
-            data = self.browser.call("Page.captureScreenshot", format="png")["data"]
+            try:
+                data = self.browser.capture_masked(format="png")
+            except Exception:
+                self.frame = None
+                self.last_capture_ok = False
+                self.last_saved_frame = None
+                if self.page:
+                    self.page.pop("screenshot", None)
+                raise
             target = Path(path) if path else self.trail_dir / f"{time.strftime('%H%M%S')}-{len(self.history):03d}.png"
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_bytes(base64.b64decode(data))
@@ -1834,6 +1878,7 @@ class Session(CoordinatedSession):
                 reply = self.external_reply or self.render()
                 if reply and reply.get("id") == prompt_id:
                     answer = {"choice": reply.get("choice"), "text": reply.get("text") or ""}
+                    self.register_secret(answer["text"])
                     break
             time.sleep(0.25)
         with self.lock:
@@ -1856,6 +1901,7 @@ class Session(CoordinatedSession):
         with self.lock:
             if not self.prompt:
                 raise SessionError("Nothing is waiting for input")
+            self.register_secret(text)
             self.external_reply = {"id": self.prompt["id"], "choice": choice, "text": text}
             return {"answered": self.prompt["id"]}
 

@@ -6,12 +6,16 @@ import json
 import math
 import secrets
 import sys
+import threading
 import time
+import unicodedata
 from contextlib import contextmanager, nullcontext
 from pathlib import Path
 
 from browser_harness.admin import ensure_daemon
 from browser_harness.helpers import cdp
+
+from .capture import CapturePrivacyError, capture_masked
 
 SCREENSHOT_TIMEOUT_SECONDS = 8.0
 VISUAL_STATE_LIMIT = 32 * 1024 * 1024
@@ -93,6 +97,11 @@ def visual_state_matches(key):
 class Browser:
     def __init__(self, url, prepare=None):
         self.last_screenshot = None
+        self.secret_values = set()
+        self.secret_targets = []
+        self.privacy_generation = 0
+        self._privacy_lock = threading.Lock()
+        self._privacy_pending = 0
         self.screenshot_available = True
         ensure_daemon()
         if prepare:
@@ -131,7 +140,74 @@ class Browser:
             raise StalePage("Document changed during evaluation")
         return response.get("result", {}).get("value")
 
+    def secret_matches(self, value):
+        """Identify values derived from an answer already registered as sensitive."""
+        if not isinstance(value, str) or not value:
+            return False
+        def normalize(text):
+            return "".join(c for c in unicodedata.normalize("NFKC", text).casefold() if c.isalnum())
+        candidate = normalize(value)
+        for known in getattr(self, "secret_values", ()):
+            if value == known:
+                return True
+            existing = normalize(known)
+            if candidate and existing and (candidate == existing or
+                    ((min(len(candidate), len(existing)) >= 3 or (candidate.isdigit() and existing.isdigit())) and
+                     (candidate in existing or existing in candidate))):
+                return True
+        return False
+
+    def privacy_revision(self):
+        """Return a stable revision or withhold while registrations are in progress."""
+        with self._privacy_lock:
+            if self._privacy_pending:
+                raise CapturePrivacyError("Secret registration in progress; screenshot withheld.")
+            return self.privacy_generation
+
+    def register_secret(self, value=None, node=None, point=None):
+        """Remember sensitive values and their target forms for this browser session only."""
+        with self._privacy_lock:
+            self._privacy_pending += 1
+            self.privacy_generation += 1
+            self.last_screenshot = None
+        try:
+            if isinstance(value, str) and value:
+                self.secret_values.add(value)
+            invalidate = getattr(self, "on_secret_registered", None)
+            if invalidate:
+                invalidate()
+            if type(node) is int or point is not None:
+                target = self.evaluate("""(([node,point]) => {
+              const e=point ? document.elementFromPoint(point[0],point[1]) : window.__jevFast?.nodes.get(node);
+              const c=window.__jevFast;
+              if (!e || !c) return null;
+              if (!c.ids.has(e)) c.ids.set(e,c.next++);
+              const id=c.ids.get(e); c.nodes.set(id,e);
+              return {origin:performance.timeOrigin,node:id};
+            })""" + "(" + json.dumps([node, point]) + ")")
+                if not isinstance(target, dict):
+                    raise CapturePrivacyError("Sensitive target could not be tracked; action withheld.")
+                if target not in self.secret_targets:
+                    self.secret_targets.append(target)
+        finally:
+            with self._privacy_lock:
+                self._privacy_pending -= 1
+                self.privacy_generation += 1
+
+    def capture_masked(self, **params):
+        try:
+            revision = self.privacy_revision()
+            image = capture_masked(self.call, self.evaluate, values=getattr(self, "secret_values", ()),
+                                   targets=getattr(self, "secret_targets", ()), **params)
+            if self.privacy_revision() != revision:
+                raise CapturePrivacyError("Privacy registration changed during capture; screenshot withheld.")
+            return image
+        except Exception:
+            self.last_screenshot = None
+            raise
+
     def observe(self, screenshot=True, screenshot_fallback=True):
+        revision = self.privacy_revision()
         if getattr(self, "after_input", None):
             action, self.after_input = self.after_input, None
             # This is read-only and happens after execution was logged, even if navigation interrupts it.
@@ -169,9 +245,17 @@ class Browser:
                 capture = screenshot and self.screenshot_available
                 try:
                     page = browser_operation(
-                        {"operation": "observe", "session": self.session, "screenshot": capture}
+                        {"operation": "observe", "session": self.session, "screenshot": capture,
+                         "secret_values": getattr(self, "secret_values", ()),
+                         "secret_targets": getattr(self, "secret_targets", ())}
                     )
+                except CapturePrivacyError:
+                    self.last_screenshot = None
+                    if not screenshot_fallback:
+                        raise
+                    page = browser_operation({"operation": "observe", "session": self.session, "screenshot": False})
                 except TimeoutError as error:
+                    self.last_screenshot = None
                     if not capture or "Page.captureScreenshot" not in str(error):
                         raise
                     if not screenshot_fallback:
@@ -194,6 +278,13 @@ class Browser:
                     page["observation_path"] = "dom"
                 else:
                     page["observation_path"] = "dom"
+                try:
+                    if self.privacy_revision() != revision:
+                        raise CapturePrivacyError("Privacy registration changed during observation; screenshot withheld.")
+                except CapturePrivacyError:
+                    self.last_screenshot = None
+                    page.pop("screenshot", None)
+                    raise
                 return page
             except StalePage:
                 if attempt == 9:
@@ -283,6 +374,10 @@ class Browser:
     def act(self, action, page, text=None):
         if not self.fresh(page, action):
             raise StalePage("Page changed since this decision. Observe again.")
+        if action["kind"] == "fill" and self.secret_matches(text):
+            if type(action.get("node")) is not int:
+                raise CapturePrivacyError("Sensitive target could not be tracked; action withheld.")
+            self.register_secret(text, action["node"])
         if action["kind"] == "wait":
             time.sleep(0.5)
         result = browser_operation({"operation": "act", "session": self.session, "action": action, "text": text})
@@ -431,10 +526,10 @@ def browser_operation(request):
         raise StalePage("Document is navigating")
     info["fingerprint"] = fingerprint(info)
     if request.get("screenshot", True):
-        info["screenshot"] = call(
-            "Page.captureScreenshot",
+        info["screenshot"] = capture_masked(
+            call, evaluate, values=request.get("secret_values", ()), targets=request.get("secret_targets", ()),
             _response_timeout=SCREENSHOT_TIMEOUT_SECONDS,
             format="jpeg",
             quality=72,
-        )["data"]
+        )
     return info

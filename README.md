@@ -159,6 +159,10 @@ reverie runs expire --apply         # remove eligible evidence
 
 Use the [synthetic smoke lab](examples/smoke-lab/README.md) to explore delayed icons, missing visuals, overlays, and small targets. [Action buckets](docs/action-buckets.md) keep every control reachable on larger pages.
 
+## Screenshot privacy
+
+New screenshots mask password, OTP, numeric-code, and tracked sensitive fields before sharing or saving. `REVERIE_SECRET_SELECTORS` accepts a trusted JSON array of CSS selectors for other private regions. Invalid configuration or a failed check withholds capture. Existing frames and clips are not rewritten, and in-flight images cannot be recalled. Review earlier evidence separately before sharing; standalone callers must serialize privacy registration with model operations. See [configuration and limits](docs/screenshot-privacy.md).
+
 ## Downloads
 
 Files that the browser downloads go to a folder that Reverie controls. They never go to `~/Downloads`.

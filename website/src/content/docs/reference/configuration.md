@@ -181,6 +181,14 @@ See [Codex pilot](/reverie/guides/codex-pilot/) before selecting the local provi
 | `REVERIE_ENV_FILE` | unset | An extra `.env` file to read first. See [How `.env` is loaded](#how-env-is-loaded). |
 | `BU_NAME` | set by Reverie | Daemon name (`laya-agent-<session>`, a name kept from the older alias). The CLI sets it when it spawns a session daemon, and the daemon refuses to start without it. Do not set it yourself. |
 
+## Screenshot privacy
+
+| Variable | Default | What it does |
+| --- | --- | --- |
+| `REVERIE_SECRET_SELECTORS` | `[]` | Trusted JSON array of CSS selectors for regions to mask in new screenshots. Invalid JSON or CSS withholds capture. Configure it in the operator environment, never through a spec or model request. |
+
+Automatic masks cover password, OTP, numeric-code, and tracked sensitive fields. Existing saved captures are not rewritten. See [screenshot privacy](https://github.com/r3c0nc1l3r/reverie/blob/main/docs/screenshot-privacy.md) for scope and compositor limits.
+
 ## Downloads
 
 | Variable | Default | What it does |

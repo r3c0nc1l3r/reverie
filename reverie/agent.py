@@ -6,6 +6,7 @@ from pathlib import Path
 
 from .actions import bounded
 from .browser import Browser, StalePage
+from .capture import CapturePrivacyError
 from .laya import LayaPolicy, laya
 from .model import action_space, choose, decision_images, field_context, field_text, resolve_decision_engine
 from .questions import MAX_STEPS
@@ -43,13 +44,17 @@ class Agent:
         self.screenshots = self.observation_mode != "dom" or bool(record_dir)
         self.screenshot_fallback = self.observation_mode == "either" and not record_dir
         try:
+            generation = self._privacy_revision()
             page = self.browser.observe(
                 screenshot=self.screenshots,
                 screenshot_fallback=self.screenshot_fallback,
             )
+            if generation != self._privacy_revision():
+                raise CapturePrivacyError("Privacy registration changed during observation; image withheld.")
         except Exception:
             self.close()
             raise
+        self._privacy_generation = generation
         self.state = dict(
             browser=self.browser,
             goal="\n".join(plan),
@@ -107,11 +112,41 @@ class Agent:
             raise StalePage("Action bucket is no longer available. Observe and choose again.")
         self._model_view()
 
+    def _privacy_revision(self):
+        check = getattr(self.browser, "privacy_revision", None)
+        return check() if check else getattr(self.browser, "privacy_generation", 0)
+
+    def _refresh_privacy_observation(self):
+        try:
+            generation = self._privacy_revision()
+        except CapturePrivacyError:
+            self.state["page"].pop("screenshot", None)
+            raise
+        if generation == self._privacy_generation:
+            return
+        # Remove the old image before any operation that might fail.
+        self.state["page"].pop("screenshot", None)
+        page = self.browser.observe(screenshot=self.screenshots, screenshot_fallback=self.screenshot_fallback)
+        if generation != self._privacy_revision():
+            raise CapturePrivacyError("Privacy registration changed during observation; image withheld.")
+        self.state["page"] = page
+        self._privacy_generation = generation
+
     def snapshot(self):
-        return {
+        self._refresh_privacy_observation()
+        result = {
             **{k: v for k, v in self.state.items() if k != "browser"},
             "elements": action_space(self.state["page"]["actions"])[0],
         }
+        try:
+            unchanged = self._privacy_revision() == self._privacy_generation
+        except CapturePrivacyError:
+            self.state["page"].pop("screenshot", None)
+            raise
+        if not unchanged:
+            self.state["page"].pop("screenshot", None)
+            raise CapturePrivacyError("Privacy registration changed during snapshot; image withheld.")
+        return result
 
     def command(self, name, body=None):
         body = body or {}
@@ -147,6 +182,7 @@ class Agent:
         elif name == "predict":
             if not state["browser"]:
                 raise ValueError("Start a demo first")
+            self._refresh_privacy_observation()
             if state["started_at"] is None:
                 state["started_at"] = time.perf_counter()
             if not state["browser"].fresh(state["page"]):
@@ -161,6 +197,7 @@ class Agent:
                 raise ValueError("This run has stopped. Start a fresh demo.")
             if len(state["decisions"]) >= MAX_STEPS * 2:
                 raise ValueError("Reached the demo's model-call budget")
+            self._refresh_privacy_observation()
             policy = getattr(self, "policy", None)
             if policy:
                 planned = policy.plan is not None

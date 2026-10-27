@@ -63,6 +63,10 @@ reverie --session admin changes --after 120 --timeout 20 --json
 
 The JSON state includes logical session, run, worker, incarnation, observation, control epoch, an atomic state revision, and a separate durable event cursor. Durable changes survive reconnects and process restarts. `events --follow --json` emits newline-delimited JSON batches. `progress --json` is a compact current summary. Reuse an `--operation-id` only with the same command, arguments, worker, owner, epoch, and incarnation. When a worker control value is omitted, the reservation binds it to the current value. An uncertain running operation is never replayed automatically. After control or worker identity changes, inspect state and events before deciding what to do next.
 
+## Screenshot privacy
+
+New captures mask password, OTP, numeric-code, and tracked sensitive fields. Use trusted `REVERIE_SECRET_SELECTORS` for other regions. Invalid settings or failed privacy checks withhold images. Existing saved evidence is not retroactively sanitized. See [screenshot privacy](https://github.com/r3c0nc1l3r/reverie/blob/main/docs/screenshot-privacy.md) for configuration and limits.
+
 ## Temporary evidence
 
 Purpose (`smoke`, `regression`, `exploratory`), result, diagnosis, and lifetime are independent fields. New sessions are temporary unless created with `--retained`.
