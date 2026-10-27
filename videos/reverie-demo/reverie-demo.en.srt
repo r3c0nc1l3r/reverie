@@ -51,125 +51,109 @@ without mixing in yesterday's runs.
 Test what users actually see.
 
 14
-00:00:24,000 --> 00:00:25,025
-When an icon is still
-
-15
-00:00:25,040 --> 00:00:25,610
-loading,
-
-16
-00:00:25,700 --> 00:00:26,945
-the pilot waits for fresh
-
-17
-00:00:26,960 --> 00:00:28,110
-visual evidence.
-
-18
 00:00:30,860 --> 00:00:32,355
 And when an icon never
 
-19
+15
 00:00:32,370 --> 00:00:33,140
 appears,
 
-20
+16
 00:00:33,220 --> 00:00:34,605
 keep the finding.
 
-21
+17
 00:00:34,620 --> 00:00:36,325
 A working text fallback doesn't
 
-22
+18
 00:00:36,340 --> 00:00:38,340
 make the visual defect disappear.
 
-23
+19
 00:00:41,560 --> 00:00:43,295
 Want to follow along?
 
-24
+20
 00:00:43,310 --> 00:00:44,755
 Let narration finish,
 
-25
+21
 00:00:44,770 --> 00:00:45,750
 then leave a short pause
 
-26
+22
 00:00:45,820 --> 00:00:47,160
 before the next operation.
 
-27
+23
 00:00:47,727 --> 00:00:49,392
 I am checking the visible
 
-28
+24
 00:00:49,407 --> 00:00:50,602
 submit action,
 
-29
+25
 00:00:50,617 --> 00:00:52,252
 I will finish this update
 
-30
+26
 00:00:52,267 --> 00:00:53,377
 before the next click.
 
-31
+27
 00:00:57,230 --> 00:00:58,810
 Need a human decision?
 
-32
+28
 00:00:58,840 --> 00:01:00,055
 Claim the request,
 
-33
+29
 00:01:00,070 --> 00:01:01,220
 take control at a safe
 
-34
+30
 00:01:01,720 --> 00:01:01,995
 boundary,
 
-35
+31
 00:01:02,010 --> 00:01:02,685
 resolve it,
 
-36
+32
 00:01:02,700 --> 00:01:04,410
 and hand the investigation back.
 
-37
+33
 00:01:08,680 --> 00:01:10,970
 Keep smoke tests temporary,
 
-38
+34
 00:01:11,050 --> 00:01:12,710
 pin evidence worth keeping,
 
-39
+35
 00:01:12,940 --> 00:01:14,295
 triage the findings,
 
-40
+36
 00:01:14,310 --> 00:01:15,835
 and give results an explicit
 
-41
+37
 00:01:15,850 --> 00:01:16,520
 lifetime.
 
-42
+38
 00:01:19,430 --> 00:01:20,475
 See the evidence,
 
-43
+39
 00:01:20,490 --> 00:01:21,500
 keep control,
 
-44
+40
 00:01:21,570 --> 00:01:22,570
 that's Reverie.
