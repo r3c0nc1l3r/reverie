@@ -16,6 +16,6 @@
 
 ## Narration and visuals
 
-Editorial narration uses Fish Audio, with its public **Friendly Women** voice and upbeat direction. The live pilot excerpt retains its recorded speech and timing.
+Editorial narration uses Fish Audio, with its public **Friendly Women** voice and upbeat direction. Reverie's runtime narration excerpt retains its recorded speech and timing.
 
 The logo is Reverie's own logo. The screen recording shows only a synthetic test app and Reverie's dashboard. HyperFrames composes the edit. The [Brag workflow](https://github.com/latent-spaces/brag) informed the story and motion. DejaVu fonts are used under the [DejaVu font license](https://dejavu-fonts.github.io/License.html).

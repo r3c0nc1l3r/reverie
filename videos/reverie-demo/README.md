@@ -22,7 +22,7 @@ And when an icon never appears, keep the finding. A working text fallback doesn'
 
 Want to follow along? Let narration finish, then leave a short pause before the next operation.
 
-Recorded pilot narration: “I am checking the visible submit action. I will finish this update before the next click.”
+Recorded Reverie narration: “I am checking the visible submit action. I will finish this update before the next click.”
 
 Need a human decision? Claim the request, take control at a safe boundary, resolve it, and hand the investigation back.
 
