@@ -9,6 +9,8 @@ import os
 
 from PIL import Image, ImageDraw
 
+from .settings import is_off
+
 
 class CapturePrivacyError(RuntimeError):
     """A screenshot could not be safely masked."""
@@ -245,6 +247,9 @@ def closed_shadow_rects(call, selectors, values):
 
 def capture_masked(call, evaluate, *, values=(), targets=(), **params):
     """Capture fresh pixels and best-effort mask local sensitive field geometry."""
+    if is_off("REVERIE_MASK_SECRETS", "1"):
+        return call("Page.captureScreenshot", **params)["data"]
+
     selectors = secret_selectors()
     expression = MASK_GEOMETRY + "(" + json.dumps([selectors, list(values), list(targets)]) + ")"
 

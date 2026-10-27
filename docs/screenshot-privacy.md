@@ -2,6 +2,12 @@
 
 Screenshot masking is **best effort, not a guarantee**. Unsupported fields, unusual paint and masking faults can leave sensitive content visible. Do not point Reverie at real secrets without your own review. Prefer synthetic test data, and inspect screenshots before sharing or exporting them.
 
+## Startup setting
+
+Masking is on by default. To turn it off, set `REVERIE_MASK_SECRETS=0` in the environment or `.env` before starting a new session. An existing session daemon retains its environment. The values `false`, `off` and `no` also turn it off. Unrecognized values keep masking on.
+
+**Turning masking off writes any visible secrets into frames and clips.** UI review receives the native page values in these captures. Native password fields keep the browser’s normal password bullets. Text and trail redaction remain unchanged. This setting does not rewrite existing evidence.
+
 ## Field-local masks
 
 Reverie attempts to cover populated password fields, one-time-code inputs, numeric authentication-code fields, and fields containing registered sensitive values. Matching uses exact values or Unicode NFKC equality. It does not use numeric substrings, case folding or punctuation removal. Ordinary postal, ZIP, case and status codes are not treated as authentication codes.
@@ -18,13 +24,13 @@ Set `REVERIE_SECRET_SELECTORS` in the operator environment to a JSON array of CS
 export REVERIE_SECRET_SELECTORS='["#account-pin", "[data-private]"]'
 ```
 
-The default is `[]`. Set it before starting a worker; restart the worker after changing its environment configuration. This is trusted configuration, not a selector channel for specs or model requests. Invalid JSON, invalid selectors and non-field matches are ignored with sanitized warnings. Arbitrary display regions, images and graphics are not covered by this setting.
+Selectors apply only when masking is on. The default is `[]`. Set it before starting a worker; restart the worker after changing its environment configuration. This is trusted configuration, not a selector channel for specs or model requests. Invalid JSON, invalid selectors and non-field matches are ignored with sanitized warnings. Arbitrary display regions, images and graphics are not covered by this setting.
 
 ## Faults and capture formats
 
 Mask inspection and drawing faults warn and keep the fresh capture when screenshot acquisition succeeds. A warning does not include field values, selectors or exception details. Unsupported or changing content may remain visible. Browser screenshot transport failures still fail; separate consistency and action guards can refuse concurrent operations or stale visual decisions.
 
-The capture boundary acquires lossless PNG pixels before masking to avoid pre-mask JPEG bleed. It normally returns the requested PNG or JPEG format. If conversion fails, it can return PNG instead; model inputs, MCP images and viewers detect the actual format.
+When masking is on, the capture boundary acquires lossless PNG pixels before masking to avoid pre-mask JPEG bleed. It normally returns the requested PNG or JPEG format. If conversion fails, it can return PNG instead; model inputs, MCP images and viewers detect the actual format.
 
 ## Existing evidence and concurrency
 

@@ -62,7 +62,7 @@ The JSON state includes logical session, run, worker, incarnation, observation, 
 
 ## Screenshot privacy
 
-Masking is **best effort, not a guarantee**. Unsupported fields and masking faults can leave content visible. Do not use real secrets without your own review. Recognized populated fields receive local stripes; empty fields keep placeholders and borders. Invalid selectors and masking faults warn while keeping fresh captures where possible. No whole-frame fallback, numeric-substring matching or stale-target fan-out is used. Existing evidence is not rewritten. See [screenshot privacy](screenshot-privacy.md) for configuration and limits.
+Masking is **best effort, not a guarantee**. Unsupported fields and masking faults can leave content visible. Do not use real secrets without your own review. Recognized populated fields receive local stripes; empty fields keep placeholders and borders. Invalid selectors and masking faults warn while keeping fresh captures where possible. No whole-frame fallback, numeric-substring matching or stale-target fan-out is used. Existing evidence is not rewritten. Masking is on by default. Set `REVERIE_MASK_SECRETS=0` before session startup to turn it off for frames, clips and UI review. Turning it off writes any visible secrets into frames and clips; text/trail redaction and native password bullets remain unchanged. See [screenshot privacy](screenshot-privacy.md) for configuration and limits.
 
 UI review uses verified capture-produced images. Invalid final evidence requires fresh capture or a declined review. Capture provenance does not guarantee that all sensitive content is hidden.
 

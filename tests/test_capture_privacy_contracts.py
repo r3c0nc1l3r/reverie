@@ -93,6 +93,18 @@ def privacy_browser(tmp_path):
                 <input id="case" aria-label="Case code" value="A713">
                 <input id="status" aria-label="Status code" value="200">
                 <input id="count" type="number" aria-label="Quantity" value="19">'''
+            if self.path == "/mask-switch":
+                content = b'''<!doctype html><style>
+                  body { margin: 0; background: white; }
+                  input { position: absolute; left: 20px; width: 160px; height: 40px;
+                    box-sizing: border-box; border: 0; padding: 4px; font: 20px monospace; color: black; }
+                  #otp { top: 20px; background: rgb(230,0,160); }
+                  #password { top: 80px; background: white; }
+                  #ordinary { top: 140px; background: white; }
+                </style>
+                <input id="otp" autocomplete="one-time-code" value="731902">
+                <input id="password" type="password" value="Synthetic123">
+                <input id="ordinary" type="text" value="Synthetic123">'''
             if self.path == "/closed":
                 content = content.replace(b"<!-- CLOSED_SHADOW -->", b"""<div id="shadow"></div><script>
                   document.getElementById('shadow').attachShadow({mode:'closed'}).innerHTML =
@@ -131,17 +143,24 @@ def privacy_browser(tmp_path):
                "XDG_CONFIG_HOME": str(short / "config"), "BH_RUNTIME_DIR": str(short / "bh-runtime"),
                "BH_TMP_DIR": str(short / "bh-tmp"), "PYTHONPATH": str(Path(__file__).resolve().parents[1])}
         env.pop("REVERIE_SECRET_SELECTORS", None)
+        env.pop("REVERIE_MASK_SECRETS", None)
+        env.pop("REVERIE_ENV_FILE", None)
         name = "privacy-" + uuid.uuid4().hex[:10]
 
         def call(*args):
             return subprocess.run([sys.executable, "-m", "reverie.control.cli", "--session", name, *args],
                                   cwd=tmp_path, env=env, capture_output=True, text=True, timeout=45)
 
-        def start(selectors=None, path="/"):
+        def start(selectors=None, path="/", mask_setting=None, client_mask_setting=None):
             if selectors is not None:
                 env["REVERIE_SECRET_SELECTORS"] = selectors
-            return call("start", "--headless", "--engine", "laya", "--voice", "off",
-                        "--url", f"http://127.0.0.1:{server.server_port}{path}")
+            if mask_setting is not None:
+                env["REVERIE_MASK_SECRETS"] = mask_setting
+            result = call("start", "--headless", "--engine", "laya", "--voice", "off",
+                          "--url", f"http://127.0.0.1:{server.server_port}{path}")
+            if client_mask_setting is not None:
+                env["REVERIE_MASK_SECRETS"] = client_mask_setting
+            return result
 
         try:
             yield start, call, values, removed, trigger_removal
@@ -776,3 +795,42 @@ def test_invalid_selector_configuration_warns_without_exposing_value(monkeypatch
         secret_selectors()
     assert caplog.records
     assert selector not in caplog.text
+
+
+@pytest.mark.parametrize("mask_setting", [None, "0"])
+def test_mask_switch_at_startup_changes_field_pixels_but_preserves_password_bullets(
+    privacy_browser, tmp_path, mask_setting
+):
+    from PIL import ImageChops
+
+    start, call, _, _, _ = privacy_browser
+    started = start(path="/mask-switch", mask_setting=mask_setting)
+    assert started.returncode == 0, started.stderr
+    output = tmp_path / "switch.png"
+    result = call("--json", "screenshot", str(output))
+    assert result.returncode == 0, result.stderr
+    with Image.open(output) as image:
+        rgb = image.convert("RGB")
+        red, green, blue = rgb.getpixel((165, 45))
+        is_magenta = red > 200 and green < 35 and blue > 125
+        assert is_magenta is (mask_setting == "0")
+        assert rgb.getpixel((220, 25)) == (255, 255, 255)
+        if mask_setting == "0":
+            password = rgb.crop((24, 84, 176, 116))
+            ordinary = rgb.crop((24, 144, 176, 176))
+            assert any(max(pixel) < 100 for pixel in password.getdata())
+            assert any(max(pixel) < 100 for pixel in ordinary.getdata())
+            assert ImageChops.difference(password, ordinary).getbbox() is not None
+
+
+def test_mask_switch_loads_dotenv_and_is_fixed_for_daemon_lifetime(privacy_browser, tmp_path):
+    (tmp_path / ".env").write_text("REVERIE_MASK_SECRETS=0\n")
+    start, call, _, _, _ = privacy_browser
+    started = start(path="/mask-switch", client_mask_setting="1")
+    assert started.returncode == 0, started.stderr
+    output = tmp_path / "dotenv-switch.png"
+    result = call("--json", "screenshot", str(output))
+    assert result.returncode == 0, result.stderr
+    with Image.open(output) as image:
+        red, green, blue = image.convert("RGB").getpixel((165, 45))
+        assert red > 200 and green < 35 and blue > 125

@@ -22,6 +22,7 @@ entries by hand.
 * Keep all controls reachable through action buckets, and add guarded screenshot-coordinate actions for unlisted controls.
 * Expose coordination through CLI state/events, MCP tools, and portable agent plugins.
 * Add best-effort, field-local screenshot masks and trusted form/text-field selectors through `REVERIE_SECRET_SELECTORS`; unsupported fields may remain visible.
+* Add startup setting `REVERIE_MASK_SECRETS=0` to disable capture masking. Turning it off writes any visible secrets into frames and clips; masking stays on by default and text/trail redaction is unchanged.
 
 ### Fixes and verification
 

@@ -167,6 +167,8 @@ Screenshot masking is **best effort, not a guarantee**. Unsupported fields and m
 
 Reverie attempts field-local opaque stripes on populated password, OTP, authentication-code and tracked sensitive fields. Empty native fields keep placeholders and borders visible; filled borders remain visible where practical. Matching uses exact values or Unicode NFKC equality, with no numeric-substring matching or stale-target fan-out. `REVERIE_SECRET_SELECTORS` accepts a trusted JSON array for form or text fields. Invalid entries and masking faults produce sanitized warnings while keeping the fresh capture when possible. Masks do not establish hidden values or controls. Existing frames, clips and in-flight images are not recalled. See [configuration and limits](docs/screenshot-privacy.md).
 
+Masking is on by default. Set `REVERIE_MASK_SECRETS=0` in the environment or `.env` before starting a new session to turn it off for frames, clips and UI review. **Turning it off writes any visible secrets into frames and clips**, and UI review receives those native page values. Native password fields keep the browser’s normal password bullets. Text and trail redaction remain unchanged. `false`, `off` and `no` also turn masking off; unrecognized values keep it on. An existing session daemon retains its environment. Trusted selectors apply only while masking is on.
+
 UI review uses verified images produced by the session’s capture pipeline. Altered, missing or unregistered final evidence requires a fresh capture or a declined review. Provenance does not change the best-effort masking limits.
 
 ## Downloads
