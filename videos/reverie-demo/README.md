@@ -4,7 +4,7 @@
 
 This 84-second video shows testing sessions, visual checks, narration pacing, human handoff, and temporary evidence in v0.2.0. The footage is recorded from the public release build with a synthetic smoke-test application in an isolated desktop.
 
-The pilot excerpt shows a coordinated run: a human resolved a visual-evidence checkpoint before it completed. See [visual-checkpoint recovery](../../docs/testing-sessions.md#visual-evidence-and-honest-verdicts).
+The completed-pilot scene shows evidence from a model-driven verification that finished before the footage was recorded. It completed the synthetic delayed-icon step without a human checkpoint, checked the confirmation before passing, and recorded an unrelated clipped fixture overlay. The follow-along excerpt records actual narration and its subsequent guarded action continuously. See [visual-checkpoint recovery](../../docs/testing-sessions.md#visual-evidence-and-honest-verdicts) if another run needs intervention.
 
 The release stores the H.264/AAC MP4 and captions as downloadable assets. The repository contains only the poster, transcript, and [credits](CREDITS.md).
 
