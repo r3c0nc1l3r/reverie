@@ -22,8 +22,10 @@ from ..settings import setting
 
 DEFAULT_MODEL = "z-ai/glm-5.3-flash"
 
-PILOT = """Visual-first interaction policy: Image 1 is the unmodified screen a real user sees; image 2 adds
-element tags for mapping only. Treat DOM labels as supporting evidence, never proof that an icon or control
+PILOT = """Visual-first interaction policy: Image 1 shows the screen with privacy masks; image 2 adds
+element tags for mapping only. Opaque diagonal stripes indicate a privacy mask, not an application defect.
+Use visible field boundaries and labels to assess field structure, but a mask does not prove the underlying value
+or reveal controls it covers. Do not pass a visual check solely because a masked area exists. Treat DOM labels as supporting evidence, never proof that an icon or control
 is actually visible or usable. Prefer one direct act from the screenshot. Delegated do prepares a guarded proposal without executing it; inspect the next screen and choose act.
 An offscreen act reveals the target first and returns without clicking; choose again after seeing it. For tiny, missing or ambiguous icons use inspect for a target crop and resource
 readiness; use bounded wait for a loading state and reobserve. Never infer a missing icon from its aria label
@@ -376,7 +378,9 @@ def validate(output, session, image_size=None):
 
 
 UI_REVIEW = """You review screenshots from one step of a QA browser test for broken or degraded UI. The images are in
-time order; the last one is the step's final screen. Report only problems a user would notice:
+time order; the last one is the step's final screen. Opaque diagonal stripes indicate a privacy mask, not an app
+defect. Assess visible field boundaries and labels, but do not infer the masked value or hidden controls, or treat
+the mask as proof that a visual check passed. Report only problems a user would notice:
 overlapping or clipped elements, cut-off or overflowing text, broken images or icons, missing styles (raw
 unstyled HTML), error banners or stack traces, raw template code (e.g. #variable# or {{x}}), empty regions where
 content should be, misaligned or unreadable controls, dialogs covering content, obviously wrong data (NaN,

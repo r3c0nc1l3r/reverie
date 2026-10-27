@@ -72,6 +72,20 @@ def privacy_browser(tmp_path):
                 return
             content = (b'<body style="margin:0;background:rgb(230,0,160)">synthetic foreign secret</body>'
                        if self.path == "/foreign" else html.replace(b"PORT", str(self.server.server_port).encode()))
+            if self.path == "/fields":
+                content = b'''<!doctype html><style>
+                  body { margin: 0; background: white; }
+                  input { position: absolute; left: 20px; width: 180px; height: 40px; box-sizing: border-box;
+                    border: 3px solid rgb(0, 220, 220); background: rgb(230, 0, 160); color: black; }
+                  input::placeholder { color: black; opacity: 1; }
+                  #empty-password { top: 20px; } #empty-otp { top: 80px; }
+                  #populated { top: 140px; } #ordinary { top: 200px; } #empty-number { top: 260px; }
+                </style>
+                <input id="empty-password" type="password" placeholder="Enter password">
+                <input id="empty-otp" autocomplete="one-time-code" placeholder="Enter code">
+                <input id="populated" type="password" value="synthetic-populated-secret">
+                <input id="ordinary" value="ordinary value">
+                <input id="empty-number" type="number" aria-label="Security code" placeholder="Enter code">'''
             if self.path == "/closed":
                 content = content.replace(b"<!-- CLOSED_SHADOW -->", b"""<div id="shadow"></div><script>
                   document.getElementById('shadow').attachShadow({mode:'closed'}).innerHTML =
@@ -400,3 +414,64 @@ finally:
     finally:
         server.shutdown()
         server.server_close()
+
+
+def test_empty_fields_keep_placeholder_and_populated_field_has_striped_mask(privacy_browser, tmp_path):
+    start, call, _, _, _ = privacy_browser
+    started = start(path="/fields")
+    assert started.returncode == 0, started.stderr
+    output = tmp_path / "fields.png"
+    result = call("--json", "screenshot", str(output))
+    assert result.returncode == 0, result.stderr
+    with Image.open(output) as image:
+        rgb = image.convert("RGB")
+        for top in (20, 80, 260):
+            assert rgb.getpixel((190, top + 20)) == (230, 0, 160)
+            assert rgb.getpixel((21, top + 20)) == (0, 220, 220)
+            # The placeholder must remain visible against the field background.
+            assert any(max(rgb.getpixel((x, y))) < 100
+                       for x in range(27, 110) for y in range(top + 8, top + 32))
+        assert rgb.getpixel((21, 160)) == (0, 220, 220)
+        pixels = [rgb.getpixel((x, y)) for x in range(26, 194) for y in range(146, 174)]
+        assert not any(r > 200 and g < 35 and b > 125 for r, g, b in pixels)
+        left_colors = {rgb.getpixel((x, y)) for x in range(26, 110) for y in range(146, 174)}
+        right_colors = {rgb.getpixel((x, y)) for x in range(110, 194) for y in range(146, 174)}
+        assert left_colors <= right_colors  # Text-bearing pixels have the same opaque mask palette.
+        assert len(set(pixels)) >= 2
+        assert any(rgb.getpixel((x, y)) != rgb.getpixel((x + 1, y))
+                   for x in range(110, 189) for y in range(148, 172))
+        assert any(rgb.getpixel((x, y)) != rgb.getpixel((x, y + 1))
+                   for x in range(110, 190) for y in range(148, 171))
+        assert rgb.getpixel((190, 220)) == (230, 0, 160)  # An unprotected control stays visible.
+
+
+@pytest.mark.parametrize("requested,expected", [("png", "PNG"), ("jpeg", "JPEG")])
+def test_capture_uses_lossless_source_and_preserves_requested_output_format(requested, expected):
+    import base64
+    import io
+
+    from reverie.capture import capture_masked
+
+    source = io.BytesIO()
+    Image.new("RGB", (64, 48), (61, 131, 211)).save(source, format="PNG")
+    screenshot_calls = []
+    geometry = {"width": 64, "height": 48, "rects": [], "documents": []}
+    evaluation_results = iter([True, geometry, geometry, True])
+
+    def evaluate(_expression):
+        return next(evaluation_results, True)
+
+    def call(method, **params):
+        if method == "DOM.getDocument":
+            return {"root": {"nodeId": 1, "children": []}}
+        if method == "Page.captureScreenshot":
+            screenshot_calls.append(params)
+            return {"data": base64.b64encode(source.getvalue()).decode()}
+        raise AssertionError(f"unexpected CDP method: {method}")
+
+    encoded = capture_masked(call, evaluate, format=requested, quality=73)
+    assert screenshot_calls
+    assert all(params.get("format") == "png" and "quality" not in params for params in screenshot_calls)
+    with Image.open(io.BytesIO(base64.b64decode(encoded))) as output:
+        assert output.format == expected
+        assert output.size == (64, 48)

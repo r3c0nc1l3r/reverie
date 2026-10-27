@@ -21,11 +21,11 @@ entries by hand.
 * Add guarded pilot hover and screenshot-coordinate hover, plus CLI `visual-hover`.
 * Keep all controls reachable through action buckets, and add guarded screenshot-coordinate actions for unlisted controls.
 * Expose coordination through CLI state/events, MCP tools, and portable agent plugins.
-
 * Mask sensitive fields and trusted private regions at the shared screenshot boundary; add `REVERIE_SECRET_SELECTORS`.
 
 ### Fixes and verification
 
+* Preserve empty-field placeholders and safe borders, identify privacy masks with opaque stripes, and acquire PNG pixels before masking to avoid JPEG bleed.
 * Reuse valid unchanged screenshots for each step while refreshing pixels at review boundaries and rejecting stale evidence.
 * Protect hover hits and associated label controls, including disabled, hidden, and inert ancestors.
 * Reject missing or stale visual observations before a hosted visual decision.

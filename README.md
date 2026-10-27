@@ -161,7 +161,7 @@ Use the [synthetic smoke lab](examples/smoke-lab/README.md) to explore delayed i
 
 ## Screenshot privacy
 
-New screenshots mask password, OTP, numeric-code, and tracked sensitive fields before sharing or saving. `REVERIE_SECRET_SELECTORS` accepts a trusted JSON array of CSS selectors for other private regions. Invalid configuration or a failed check withholds capture. Existing frames and clips are not rewritten, and in-flight images cannot be recalled. Review earlier evidence separately before sharing; standalone callers must serialize privacy registration with model operations. See [configuration and limits](docs/screenshot-privacy.md).
+New screenshots cover filled password, OTP, numeric-code, and tracked sensitive fields with opaque stripes before sharing or saving. Empty native fields keep their placeholders and borders visible; filled fields preserve borders when safe. A privacy mask is not proof of a hidden value or control. `REVERIE_SECRET_SELECTORS` accepts a trusted JSON array of CSS selectors for other private regions. Invalid configuration or a failed check withholds capture. Existing frames and clips are not rewritten, and in-flight images cannot be recalled. Review earlier evidence separately before sharing; standalone callers must serialize privacy registration with model operations. See [configuration and limits](docs/screenshot-privacy.md).
 
 ## Downloads
 

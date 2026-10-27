@@ -1,6 +1,10 @@
 # Screenshot privacy
 
-New captures pass through an opaque masking boundary before Reverie returns, shares, or saves their image bytes. It covers password fields, one-time-code inputs, and numeric fields labeled as codes or tokens. It also tracks values and targets used through secret entry, redacted fills, and checkpoint or reply answers, in memory for that browser session. Masking changes the image, not the page or its input values.
+New captures pass through an opaque striped masking boundary before Reverie returns, shares, or saves their image bytes. It covers password fields, one-time-code inputs, and numeric fields labeled as codes or tokens. It also tracks values and targets used through secret entry, redacted fills, and checkpoint or reply answers, in memory for that browser session. Masking changes the image, not the page or its input values.
+
+Empty native text fields keep their placeholders and borders visible. Filled sensitive fields receive fixed opaque diagonal stripes, with their borders visible when geometry permits safe masking. Trusted non-field regions remain covered even when they have no value. Uncertain paint or geometry can require broader coverage. The capture boundary acquires lossless PNG pixels before applying masks, which avoids spreading secret pixels through prior JPEG compression.
+
+The pilot treats stripes as privacy masks, not application defects. A mask cannot establish a hidden value, a covered control, or a passing visual check.
 
 ## Trusted private regions
 
