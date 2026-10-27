@@ -11,7 +11,7 @@ export default defineConfig({
 		starlight({
 			title: 'Reverie',
 			description:
-				'Spec-driven browser tests: local Laya clicks, a multimodal pilot, and an orchestrator CLI.',
+				'Spec-driven browser tests with a hosted decision engine by default, a multimodal pilot, and an orchestrator CLI.',
 			logo: { src: './src/assets/logo.svg' },
 			favicon: '/favicon.svg',
 			social: [{ icon: 'github', label: 'GitHub', href: 'https://github.com/r3c0nc1l3r/reverie' }],
@@ -34,6 +34,10 @@ export default defineConfig({
 						{ slug: 'guides/writing-specs' },
 						{ slug: 'guides/running-specs' },
 						{ slug: 'guides/runs-and-dashboard' },
+						{ slug: 'guides/testing-sessions' },
+						{ slug: 'guides/agent-integrations' },
+						{ slug: 'guides/action-buckets' },
+						{ slug: 'guides/codex-pilot' },
 						{ slug: 'guides/docker' },
 						{ slug: 'guides/narration' },
 						{ slug: 'guides/examples' },

@@ -1,6 +1,6 @@
 ---
 title: Models and providers
-description: How Reverie picks the decision engine (Jev or Laya), the escalation model, the pilot model and the providers.
+description: How Reverie picks the decision engine (Jev, Laya, or experimental Liquid), the escalation model, the pilot model and the providers.
 ---
 
 Reverie uses three kinds of model. Each has its own settings. One OpenRouter key covers the default setup. See [Configuration](/reverie/reference/configuration/) for every variable.
@@ -31,7 +31,7 @@ Reverie uses three kinds of model. Each has its own settings. One OpenRouter key
 
 ## Pilot and text model
 
-Both call an OpenAI-compatible chat API at the base URL plus `/chat/completions`. The text model and the pilot each have their own settings, so they can use different endpoints.
+HTTP providers call an OpenAI-compatible chat API at the base URL plus `/chat/completions`. The text model and the pilot each have their own settings, so they can use different endpoints.
 
 | Setting | Text model | Pilot |
 | --- | --- | --- |
@@ -53,6 +53,10 @@ A provider preset picks the base URL. Set `TEXT_MODEL_PROVIDER` or `REVERIE_PILO
 | `deepseek` | `https://api.deepseek.com/v1` | none |
 
 With no provider and no base URL, Reverie uses the `deepseek` base URL. With a base URL but no provider, Reverie matches the host against the presets, so `TEXT_MODEL_BASE_URL=https://openrouter.ai/api/v1` behaves like `openrouter`. An unknown host gets no preset behaviour.
+
+### Codex local provider
+
+Set `REVERIE_PILOT_PROVIDER=codex` and explicitly set `REVERIE_PILOT_MODEL=gpt-6.1-terra` to use the installed Codex app-server with an existing local ChatGPT sign-in. HTTP base URLs and API keys do not apply to this provider. `TEXT_MODEL_PROVIDER=codex` and `TEXT_MODEL=gpt-6.1-terra` route the text helper through it too. Jev stays a separate decision engine. See [Codex pilot](/reverie/guides/codex-pilot/) for setup and restrictions.
 
 ### Which value wins
 
@@ -90,18 +94,27 @@ On a local endpoint, `TEXT_MODEL_REASONING=none` sends `reasoning_effort: none`;
 
 ### Vision for the pilot
 
-The pilot receives a screenshot with a numbered tag on every on-screen control. Set `REVERIE_PILOT_VISION=0` to turn that off. The pilot model must accept images to use it. A second call reviews each step's frames for broken UI; set `REVERIE_UI_REVIEW=0` to turn it off.
+The pilot receives raw and annotated screenshots at meaningful decisions. Target crops and loading diagnostics help distinguish a delayed image, an obscured control, and a persistent visual defect. DOM references help guard a target; visual verification determines whether a real user could use it. Set `REVERIE_PILOT_VISION=0` to turn that off. The pilot model must accept images to use it. A second call reviews each step's frames for broken UI; set `REVERIE_UI_REVIEW=0` to turn it off.
 
 ## Decision engines
 
-Layer 1, the decision engine, makes each click and keystroke under the pilot. Layer 2, the escalation model, steps in when the decision engine is unsure. Two engines can be layer 1.
+Layer 1, the decision engine, makes each click and keystroke under the pilot. Layer 2, the escalation model, steps in when the decision engine is unsure. Jev, Laya, or the experimental Liquid adapter can be layer 1.
 
 | Engine | Where it runs | Needs | How to choose it |
 | --- | --- | --- | --- |
 | Jev (default) | Hosted on OpenRouter's Decisions API (`POST https://openrouter.ai/api/alpha/decisions`), model `typesafe/jev-1.13`; `REMOTE_DECISION_MODEL` overrides it | `OPENROUTER_API_KEY`; no local server | Nothing, or `reverie start --engine jev` |
+| Liquid (experimental) | Hosted on the same Decisions API, model `liquid/d1-ultra` | The same `OPENROUTER_API_KEY` | `reverie start --engine liquid` or `REVERIE_DECISION_ENGINE=liquid` |
 | Laya | Locally, through laya.cpp (`LAYA_BASE_URL`) or MLX (`LAYA_BACKEND=mlx`; `LOCAL_DECISION_MODEL` is the MLX model) | A local model server or an Apple Silicon Mac; no key | `reverie start --engine laya`, or `REVERIE_DECISION_ENGINE=laya` |
 
 Jev costs about $0.0001 to $0.0004 and takes about 250 ms per decision. Laya is free; speed depends on your hardware.
+
+### Experimental Liquid engine
+
+Jev 1.13 remains the default. Liquid uses fresh screenshots and observed-element geometry by default. If capture fails or is stale, the decision stops. Screenshots and structured page data go to OpenRouter; use approved test content.
+
+Set `REVERIE_LIQUID_MODEL` to override `liquid/d1-ultra`. `REVERIE_DECISION_IMAGES=off` selects a text-only comparison. `REVERIE_DECISION_IMAGES=on` also enables screenshots for Jev. Start a new session after changing settings.
+
+Ultra's advertised context is 32K, compared with Jev's 262K. Long field values can exceed Ultra's limit. Reverie does not automatically compact the state or switch models. A small synthetic comparison did not justify changing the default. See the [evaluation](https://github.com/r3c0nc1l3r/reverie/blob/main/docs/eval/liquid-vs-jev.md).
 
 ### How to choose
 
@@ -112,7 +125,7 @@ Jev costs about $0.0001 to $0.0004 and takes about 250 ms per decision. Laya is 
 
 The session's engine drives `do`, `auto` and the pilot. Set it with `reverie start --engine laya` or `REVERIE_DECISION_ENGINE=laya`. The flag wins over the variable. Any other value of `REVERIE_DECISION_ENGINE` is an error. The older name `LAYA_AGENT_ENGINE` still works.
 
-`suggest`, `auto` and `step` also take `--engine`. With `--engine jev` or `--engine laya` they use that engine alone for that one command, and the session's engine stays as it was. `suggest` and `auto` also accept `stack` (the default: the decision engine proposes, the escalation model overrules) and `escalation` (the escalation model alone; the old value `mercury` still works). `step` and `run` accept `laya` and `jev`.
+`suggest`, `auto` and `step` also take `--engine`. With `--engine jev`, `--engine laya`, or `--engine liquid` they use that engine alone for that one command, and the session's engine stays as it was. `suggest` and `auto` also accept `stack` (the default: the decision engine proposes, the escalation model overrules) and `escalation` (the escalation model alone; the old value `mercury` still works). `step` and `run` accept `laya`, `jev`, and `liquid`.
 
 ### When the key is missing
 

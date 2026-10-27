@@ -1,6 +1,6 @@
 """A decision engine, Jev (hosted, the default) or Laya (local), chooses an observed action. Code owns execution."""
 
-__version__ = "0.1.0"  # x-release-please-version
+__version__ = "0.2.0"  # x-release-please-version
 
 from .agent import Agent
 from .browser import Browser

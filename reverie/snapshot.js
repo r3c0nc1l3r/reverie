@@ -21,6 +21,7 @@
         n.nodeType===1 && n.getAttribute('aria-hidden')!=='true' ? name(n,seen) : '').join(' ').trim()) ||
       e.getAttribute('title') || e.getAttribute('placeholder') || '';
   };
+  cache.name=name;
   // Legacy table forms leave controls unnamed ("Order ID:" sits in the previous cell; a GO button sits under a
   // section heading). Only when a control has no accessible name, borrow the nearest visible caption.
   const caption = e => {
@@ -117,7 +118,7 @@
       e.getAttribute('aria-expanded'),e.getAttribute('aria-checked'),e.getAttribute('aria-selected'),
       e.getAttribute('href'),scope?.innerText?.slice(0,6000)||''];
   };
-  const actions=[];
+  const actions=[], selectLabels=new Map();
   for (const e of document.querySelectorAll(selector)) {
     if (!safe(e) || !visible(e) || e.matches(':disabled') || e.closest('[aria-disabled="true"]')) continue;
     const r=e.getBoundingClientRect(), x=r.x+r.width/2, y=r.y+r.height/2, rname=role(e);
@@ -143,8 +144,9 @@
     }
     if (['checkbox','radio'].includes(e.type)) base.checked=String(e.checked);
     if (e.tagName==='SELECT') {
+      selectLabels.set(base.node,base.label);
       for (const o of e.options) if (!o.selected && !o.disabled && !o.closest('optgroup[disabled]'))
-        actions.push({...base,kind:'select',value:o.value,
+        actions.push({...base,kind:'select',value:o.value,option_index:o.index,option_label:o.label,
           current_value:[...e.selectedOptions].map(o=>o.label).join(', '),label:base.label+' → '+o.label});
     } else {
       const editable=!e.readOnly && e.getAttribute('aria-readonly')!=='true' &&
@@ -194,12 +196,51 @@
   const semantics=actions.map(({rect,offscreen,...action})=>action);
   const marker=[performance.timeOrigin,location.href,scrollX,scrollY,innerWidth,innerHeight,
     document.title,text,semantics,page_key[6]];
-  const omitted_actions=Math.max(0,actions.length-250);
-  actions.splice(250);
   actions.forEach((a,i)=>a.id='e'+(i+1));
-  if (scrollY+innerHeight<height-2) actions.push({id:'scroll_down',kind:'scroll',label:'Scroll down',delta:560});
-  if (scrollY>0) actions.push({id:'scroll_up',kind:'scroll',label:'Scroll up',delta:-560});
-  actions.push({id:'wait',kind:'wait',label:'Wait for the page to update'});
+  let presented=actions, action_buckets;
+  if (actions.length>250) {
+    action_buckets={};
+    // Range buckets are nested until every list is bounded, even on very large pages.
+    const paginate=(list,prefix) => {
+      let level=0;
+      while (list.length>200) {
+        const next=[];
+        for (let i=0;i<list.length;i+=200) {
+          const children=list.slice(i,i+200), id=`bucket_range_${prefix}_${level}_${i/200+1}`;
+          const count=children.reduce((n,a)=>n+(a.kind==='expand' ? a.count : 1),0);
+          action_buckets[id]=children;
+          const first=children[0].label.slice(0,45), last=children.at(-1).label.slice(0,45);
+          next.push({id,kind:'expand',bucket:id,label:`Items ${i+1}–${i+children.length}: ${first} … ${last}`,count});
+        }
+        list=next; level++;
+      }
+      return list;
+    };
+    const groups=new Map(), order=[];
+    for (const a of actions) {
+      const key=a.kind==='select' ? `select_${a.node}` :
+        ['button','link'].includes(a.role) ? 'buttons_links' : a.kind==='fill' ||
+          ['textbox','searchbox','spinbutton','combobox'].includes(a.role) ? 'inputs' : 'other';
+      if (!groups.has(key)) { groups.set(key,[]); order.push(key); }
+      groups.get(key).push(a);
+    }
+    presented=[];
+    for (const key of order) {
+      const children=groups.get(key), first=children[0], id=`bucket_${key}`;
+      const isSelect=first.kind==='select';
+      const label=isSelect ? selectLabels.get(first.node) :
+        ({buttons_links:'Buttons and links',inputs:'Inputs',other:'Other controls'})[key];
+      action_buckets[id]=paginate(children,key);
+      const entry={id,kind:'expand',bucket:id,label,count:children.length};
+      if (isSelect) Object.assign(entry,{node:first.node,role:'combobox',current_value:first.current_value});
+      presented.push(entry);
+    }
+    presented=paginate(presented,'root');
+  }
+  if (scrollY+innerHeight<height-2) presented.push({id:'scroll_down',kind:'scroll',label:'Scroll down',delta:560});
+  if (scrollY>0) presented.push({id:'scroll_up',kind:'scroll',label:'Scroll up',delta:-560});
+  presented.push({id:'wait',kind:'wait',label:'Wait for the page to update'});
   return {url:location.href,title:document.title,w:innerWidth,h:innerHeight,text,
-    scroll:{y:scrollY,height},actions,marker,page_key,guards,omitted_actions};
+    scroll:{y:scrollY,height},actions:presented,marker,page_key,guards,omitted_actions:0,
+    ...(action_buckets ? {action_buckets} : {})};
 })()

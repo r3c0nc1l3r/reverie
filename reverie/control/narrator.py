@@ -1,4 +1,4 @@
-"""Spoken narration that never blocks the browser. Speech runs in order on one background thread."""
+"""Bounded speech playback with completion tickets for supervised browser pacing."""
 
 import io
 import os
@@ -9,8 +9,23 @@ import subprocess
 import threading
 import time
 import wave
+from dataclasses import dataclass, field
 
 from ..settings import setting
+
+
+@dataclass
+class SpeechTicket:
+    id: int
+    text: str
+    done: threading.Event = field(default_factory=threading.Event)
+    state: str = "queued"
+    generation: int = 0
+    ended: float = 0.0
+    error: str | None = None
+    started_at: float | None = None
+    completed_at: float | None = None
+
 
 VOICES = ("auto", "kitten", "kokoro", "fish", "espeak", "spd", "off")
 PLAYERS = (["pw-play", "-"], ["paplay"], ["mpv", "--really-quiet", "--no-video", "-"])
@@ -77,6 +92,7 @@ class Narrator:
         self.voice = resolve_voice(voice)
         self.rate = rate or int(setting("REVERIE_SPEECH_RATE", "185"))
         self.spoken = []
+        self.muted = False
         self._queue = queue.Queue()
         self._idle = threading.Event()
         self._idle.set()
@@ -86,6 +102,13 @@ class Narrator:
         self.wake_seconds = float(setting("REVERIE_AUDIO_WAKE", "1.2"))
         self.wake_after_idle = float(setting("REVERIE_AUDIO_WAKE_IDLE", "4"))
         self.last_audio = 0.0
+        self._serial = 0
+        self._generation = 0
+        self._guard = threading.RLock()
+        self._current = None
+        self._process = None
+        self._last_ticket = None
+        self.on_event = None
         self._thread = threading.Thread(target=self._worker, daemon=True)
         self._thread.start()
 
@@ -94,27 +117,132 @@ class Narrator:
         if not text:
             return
         self.spoken.append(text)
-        if self.voice == "off":
-            return
+        with self._guard:
+            self._serial += 1
+            ticket = SpeechTicket(self._serial, text, generation=self._generation)
+            self._last_ticket = ticket
+        if self.voice == "off" or self.muted:
+            ticket.state = "silent"
+            ticket.done.set()
+            return ticket
         self._idle.clear()
-        self._queue.put(text)
+        # A running utterance plus one future beat. Replaced captions remain in the run trail.
+        with self._guard:
+            while True:
+                try:
+                    old = self._queue.get_nowait()
+                except queue.Empty:
+                    break
+                if old is not None:
+                    old.state = "superseded"
+                    old.done.set()
+            self._idle.clear()
+            self._queue.put(ticket)
         if wait:
             self.drain()
+        return ticket
 
     def drain(self, timeout=30):
-        self._idle.wait(timeout)
+        return self._idle.wait(timeout)
+
+    def boundary(self, ticket=None, padding_ms=350, cancelled=None, timeout=90):
+        """Wait only for the remainder of this beat; page/model time already elapsed counts."""
+        ticket = ticket or self._last_ticket
+        if ticket is None or ticket.state in {"silent", "skipped", "superseded"}:
+            return True
+        deadline = time.monotonic() + timeout
+        while not ticket.done.wait(0.05):
+            if cancelled and cancelled():
+                return False
+            if time.monotonic() >= deadline:
+                raise RuntimeError("Narration did not finish; retry or skip narration to continue")
+        if ticket.error:
+            raise RuntimeError(f"Audio unavailable: {ticket.error}. Retry or skip narration to continue")
+        if ticket.state != "completed":
+            return True
+        until = ticket.ended + max(0, padding_ms) / 1000
+        while (remaining := until - time.monotonic()) > 0:
+            if cancelled and cancelled():
+                return False
+            time.sleep(min(0.05, remaining))
+        return True
+
+    def skip(self):
+        with self._guard:
+            self._generation += 1
+            if self._current:
+                self._current.state = "skipped"
+                self._current.error = None
+                self._current.done.set()
+            if self._last_ticket:
+                self._last_ticket.state = "skipped"
+                self._last_ticket.error = None
+                self._last_ticket.done.set()
+            while True:
+                try:
+                    item = self._queue.get_nowait()
+                except queue.Empty:
+                    break
+                if item:
+                    item.state = "skipped"
+                    item.done.set()
+            if self._process and self._process.poll() is None:
+                self._process.terminate()
+        self._idle.set()
+        self._notify("skipped", self._last_ticket)
+
+    def state(self, padding_ms=350):
+        ticket = self._last_ticket
+        state = ticket.state if ticket else "idle"
+        remaining = 0
+        if ticket and state == "completed":
+            remaining = max(0, round((ticket.ended + padding_ms / 1000 - time.monotonic()) * 1000))
+            state = "padding" if remaining else "idle"
+        return {"state": state, "utterance_id": ticket.id if ticket else None,
+                "padding_remaining_ms": remaining, "error": ticket.error if ticket else None,
+                "started_at": ticket.started_at if ticket else None,
+                "completed_at": ticket.completed_at if ticket else None}
+
+    def _notify(self, state, ticket):
+        if self.on_event and ticket:
+            try:
+                self.on_event({"state": state, "utterance_id": ticket.id, "error": ticket.error,
+                               "started_at": ticket.started_at, "completed_at": ticket.completed_at})
+            except Exception:
+                pass
 
     def close(self):
+        self.skip()
         self._queue.put(None)
 
     def _worker(self):
-        while (text := self._queue.get()) is not None:
+        while (ticket := self._queue.get()) is not None:
+            with self._guard:
+                if ticket.generation != self._generation or ticket.state == "skipped":
+                    ticket.state = "skipped"
+                    ticket.done.set()
+                    if self._queue.empty():
+                        self._idle.set()
+                    continue
+                self._current = ticket
+                ticket.state = "preparing"
+            self._notify("preparing", ticket)
             try:
-                self._speak(text)
-            except Exception:
-                pass  # Narration is best effort; it must never stop a browser run.
-            if self._queue.empty():
-                self._idle.set()
+                self._speak(ticket.text)
+                if ticket.state != "skipped":
+                    ticket.state = "completed"
+            except Exception as error:
+                if ticket.state != "skipped":
+                    ticket.error = str(error)[:240]
+                    ticket.state = "error"
+            ticket.ended = time.monotonic()
+            ticket.completed_at = time.time()
+            ticket.done.set()
+            self._notify(ticket.state, ticket)
+            with self._guard:
+                self._current = None
+                if self._queue.empty():
+                    self._idle.set()
 
     def _wake(self):
         if not self.bluetooth or self.wake_seconds <= 0 or time.monotonic() - self.last_audio < self.wake_after_idle:
@@ -143,15 +271,38 @@ class Narrator:
             self.last_audio = time.monotonic()
 
     def _play(self, text, audio):
+        if self._current and self._current.state == "skipped":
+            return
+        if self._current:
+            self._current.started_at = time.time()
+            self._current.state = "speaking"
+            self._notify("speaking", self._current)
         if self.voice in {"kokoro", "kitten"}:
-            subprocess.run(player(), input=audio, timeout=60, check=False,
-                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            command = player()
         elif self.voice == "fish":
-            subprocess.run(["mpv", "--really-quiet", "--no-video", "-"], input=audio, timeout=60, check=False)
+            command = ["mpv", "--really-quiet", "--no-video", "-"]
         elif self.voice == "espeak":
             binary = shutil.which("espeak-ng") or "espeak"
-            subprocess.run([binary, "-s", str(self.rate), text], timeout=60, check=False,
-                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            command = [binary, "-s", str(self.rate), text]
         elif self.voice == "spd":
-            subprocess.run(["spd-say", "-w", text], timeout=60, check=False,
-                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            command = ["spd-say", "-w", text]
+        else:
+            return
+        if not command:
+            raise RuntimeError("No audio playback program is available")
+        with self._guard:
+            if self._current and self._current.state == "skipped":
+                return
+            self._process = subprocess.Popen(command, stdin=subprocess.PIPE, stdout=subprocess.DEVNULL,
+                                             stderr=subprocess.DEVNULL)
+            process = self._process
+        try:
+            process.communicate(audio, timeout=60)
+            if process.returncode and not (self._current and self._current.state == "skipped"):
+                raise RuntimeError(f"Audio player exited {process.returncode}")
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.communicate()
+            raise RuntimeError("Audio player timed out") from None
+        finally:
+            self._process = None

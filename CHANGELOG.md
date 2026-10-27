@@ -7,6 +7,35 @@ project uses [Semantic Versioning](https://semver.org/). From 0.1.0 on,
 from the Conventional Commit titles of merged pull requests. Do not edit released
 entries by hand.
 
+## 0.2.0 (2026-10-27)
+
+### Features
+
+* Add experimental `--engine liquid` decisions through OpenRouter, using `liquid/d1-ultra` by default. Jev 1.13 remains the default engine.
+* Add fresh screenshot and observed-target geometry input for Liquid, with optional image input for Jev.
+* Group browser workers, workflows, roles, and attempts into durable testing sessions.
+* Stream authenticated dashboard updates with reconnect snapshots and bounded live frames.
+* Add follow-along narration with a 350 ms playback boundary, one-operation supervision, requests, and human takeover.
+* Add explicit pinning, triage, and temporary evidence cleanup with durable result metadata.
+* Add a restricted Codex app-server pilot using an existing local sign-in.
+* Keep all controls reachable through action buckets, and add guarded screenshot-coordinate actions for unlisted controls.
+* Expose coordination through CLI state/events, MCP tools, and portable agent plugins.
+
+### Fixes and verification
+
+* Reject missing or stale visual observations before a hosted visual decision.
+* Preserve decision-layer history and stated-value guards across the experimental engine.
+* Add focused adapter, screenshot freshness, and accepted-action history regression coverage.
+* Bind command retries to the worker and effective control identity, including omitted epochs.
+* Capture event watermarks atomically with snapshots to avoid skipping updates during resynchronization.
+* Discover owned native Wayland or authenticated X11 displays for headed launches, without a silent headless fallback.
+* Preserve complete visual signatures across bounded IPC messages and consistent screenshot coordinates.
+
+### Documentation
+
+* Add the narrated demo, recorded from the public build, with captions, a poster, and music credits.
+* Document Liquid settings, screenshot data sharing, evaluation limits, and its smaller context budget.
+
 ## 0.1.0 (2026-09-28)
 
 First release of reverie as its own repository. It contains only the agent

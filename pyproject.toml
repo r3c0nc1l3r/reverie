@@ -1,11 +1,12 @@
 [project]
 name = "reverie"
-version = "0.1.0"
+version = "0.2.0"
 description = "Spec-driven browser test agent: local Laya clicks, a multimodal pilot, and an orchestrator CLI."
 readme = "README.md"
 license = "MIT"
 requires-python = ">=3.12"
 dependencies = [
+    "aiohttp>=3.13,<4",
     "browser-harness==0.1.13",
     "httpx[http2]>=0.28,<1",
     "pillow>=11,<13",

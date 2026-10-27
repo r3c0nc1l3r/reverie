@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><title>Action bucket fixture</title>
+<style>body { font: 16px sans-serif; margin: 24px; } label { display: block; margin: 12px 0; } #escape { padding: 12px; background: #e2eefb; width: 230px; cursor: pointer; }</style></head>
+<body>
+<h1>Synthetic case details</h1>
+<p>Use the dropdowns and update this synthetic case.</p>
+<div id="states"></div>
+<form onsubmit="event.preventDefault(); document.getElementById('result').textContent = 'Case updated';">
+  <input type="image" alt="UPDATE" src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='130' height='40'%3E%3Crect width='130' height='40' fill='%23045'/%3E%3Ctext x='22' y='26' fill='white'%3EUPDATE%3C/text%3E%3C/svg%3E">
+</form>
+<div id="escape" onclick="document.getElementById('escape-result').textContent = 'Visual control clicked'">Visual-only custom control</div>
+<p id="state-result"></p><p id="result"></p><p id="escape-result"></p>
+<script>
+const states = 'Alabama,Alaska,Arizona,Arkansas,California,Colorado,Connecticut,Delaware,Florida,Georgia,Hawaii,Idaho,Illinois,Indiana,Iowa,Kansas,Kentucky,Louisiana,Maine,Maryland,Massachusetts,Michigan,Minnesota,Mississippi,Missouri,Montana,Nebraska,Nevada,New Hampshire,New Jersey,New Mexico,New York,North Carolina,North Dakota,Ohio,Oklahoma,Oregon,Pennsylvania,Rhode Island,South Carolina,South Dakota,Tennessee,Texas,Utah,Vermont,Virginia,Washington,West Virginia,Wisconsin,Wyoming,District of Columbia,Puerto Rico'.split(',');
+for (const label of ['Home state', 'Mailing state', 'Business state', 'Court state', 'Service state', 'Other state']) {
+  const wrapper = document.createElement('label'); wrapper.textContent = label + ' ';
+  const select = document.createElement('select'); select.name = label;
+  for (const state of states) select.add(new Option(state, state));
+  if (label === 'Home state') select.addEventListener('change', () => { document.getElementById('state-result').textContent = 'Home state: ' + select.options[select.selectedIndex].text; });
+  wrapper.append(select); document.getElementById('states').append(wrapper);
+}
+</script></body></html>

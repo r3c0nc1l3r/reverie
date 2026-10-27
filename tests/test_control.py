@@ -930,7 +930,7 @@ def test_reverie_gitignore_covers_downloads_and_is_upgraded(tmp_path):
     base.mkdir()
     (base / ".gitignore").write_text("runs/\ncache/\nmine/\n")
     project.reverie_dir(tmp_path)
-    assert (base / ".gitignore").read_text().splitlines() == ["runs/", "cache/", "mine/", "downloads/"]
+    assert (base / ".gitignore").read_text().splitlines() == ["runs/", "cache/", "mine/", "downloads/", "state.sqlite3*"]
     project.reverie_dir(tmp_path)
     assert (base / ".gitignore").read_text().count("downloads/") == 1
 
@@ -953,3 +953,41 @@ def test_the_check_command_passes_link_and_href_to_the_session():
     session = Mock()
     COMMANDS["check"](session, {"link": "Confirm", "href": "token="})
     session.check.assert_called_once_with(None, None, None, "Confirm", "token=")
+
+
+def test_liquid_accept_keeps_decision_history(tmp_path):
+    s = session(tmp_path)
+    s.goal, s.hints, s.engine = "Open item", [], "liquid"
+    s.pending = {"ref": "e3", "layer": "decision", "decision_engine": "liquid",
+                 "fingerprint": s.page["fingerprint"], "label": "Open item"}
+    s.agent = Mock()
+    s.agent.state = {"history": []}
+    def execute(name, body):
+        assert name == "act" and body["fingerprint"] == s.page["fingerprint"]
+        s.agent.state["history"].append({"action": "Submit", "kind": "click", "url": "https://example.test/"})
+    s.agent.command.side_effect = execute
+    s.accept()
+    assert len(s.agent.state["history"]) == 1
+    assert len(s.history) == 1 and s.history[0]["decision_engine"] == "liquid"
+    with pytest.raises(SessionError, match="No pending"):
+        s.accept()
+    s.agent.command.assert_called_once()
+
+
+def test_visual_decision_page_rejects_failed_capture(tmp_path):
+    s = session(tmp_path)
+    s.frame = "previous"
+    s.last_capture_ok = False
+    agent = Mock(screenshots=True)
+    with pytest.raises(SessionError, match="fresh screenshot"):
+        s._decision_page(agent)
+    s.frame, s.last_capture_ok = "fresh", True
+    assert s._decision_page(agent)["screenshot"] == "fresh"
+
+
+def test_cli_start_accepts_liquid(monkeypatch):
+    received = []
+    monkeypatch.setattr(cli, "start", lambda args: received.append(args) or {"status": "started"})
+    cli.main(["--session", "sample", "start", "--url", "http://127.0.0.1:8080",
+              "--engine", "liquid", "--headless", "--voice", "off"])
+    assert received[0].engine == "liquid"

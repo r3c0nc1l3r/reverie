@@ -10,18 +10,21 @@ current frame, caption, pending proposal, and prompt.
 """
 
 import argparse
+import asyncio
 import json
 import os
 import re
 import secrets
-import threading
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+import time
+import uuid
 from pathlib import Path
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import urlparse
 
 import httpx
+from aiohttp import WSMsgType, web
 
 from ..settings import setting
+from .live import ViewerBuffer
 from .project import cache_dir, run_roots
 from .server import load_environment, state_dir
 
@@ -241,9 +244,9 @@ def index(roots):
     return {"suites": out, "live": [{"session": i["name"], "dir": d} for d, i in live.items()]}
 
 
-LEGACY_LAYERS = {"laya": "decision", "jev": "decision", "mercury": "escalation"}
+LEGACY_LAYERS = {"laya": "decision", "jev": "decision", "liquid": "decision", "mercury": "escalation"}
 WHO = {"decision": "Decision engine", "escalation": "Escalation model", "pilot": "Pilot", "orchestrator": "Claude"}
-ENGINES = {"jev": "Jev", "laya": "Laya"}
+ENGINES = {"jev": "Jev", "laya": "Laya", "liquid": "Liquid"}
 
 
 def who_label(event):
@@ -385,7 +388,8 @@ def deck(roots, run_id=None, suite=None):
 
 
 def session_call(info, command, args=None, timeout=10):
-    response = httpx.post(f"http://127.0.0.1:{info['port']}/", json={"command": command, "args": args or {}},
+    response = httpx.post(f"http://127.0.0.1:{info['port']}/", json={"command": command, "args": args or {},
+                                                                              "operation_id": uuid.uuid4().hex},
                           headers={"X-Laya-Agent-Token": info["token"]}, timeout=timeout)
     return response.json()
 
@@ -398,7 +402,15 @@ def live_state(info):
 
 def run_detail(roots, run_id):
     folder, _, _ = run_id.partition("~")
-    run = next((r for r in all_runs(roots) if r["id"] == run_id), None)
+    run = None
+    for root in roots:
+        base = Path(root).resolve()
+        candidate = (base / folder).resolve()
+        if candidate.parent != base or not (candidate / "trail.jsonl").is_file():
+            continue
+        run = next((r for r in parse_trail(candidate / "trail.jsonl") if r["id"] == run_id), None)
+        if run:
+            break
     if not run:
         return None
     live = live_sessions().get(folder)
@@ -415,108 +427,497 @@ def run_detail(roots, run_id):
     return run
 
 
-def serve(args):
-    roots = [Path(r).resolve() for r in args.root]
-    path = dashboard_file()
-    token = None
-    if path.exists():  # Keep the same URL across restarts so an open tab keeps working.
-        try:
-            token = json.loads(path.read_text()).get("token")
-        except ValueError:
-            token = None
-    token = token or secrets.token_urlsafe(18)
+DASHBOARD_COOKIE = "reverie-dashboard"
+LIVE_FIELDS = {
+    "name", "session_id", "run_id", "revision", "status", "url", "title", "caption", "pending", "goal",
+    "hints", "prompt", "checkpoints", "tabs", "goal_plan", "test", "layers", "observation", "controls",
+    "narration", "frame", "frame_captured_at", "frame_id",
+}
+
+
+def _same_token(left, right):
+    return bool(left and right) and secrets.compare_digest(str(left), str(right))
+
+
+def _project_for_roots(roots):
+    first = Path(roots[0]).resolve() if roots else Path.cwd().resolve()
+    if first.name == "runs" and first.parent.name == ".reverie":
+        return first.parent.parent
+    return first
+
+
+def _coordination_store(project_root):
+    try:
+        from .coordination import CoordinationStore
+
+        return CoordinationStore(project_root)
+    except (ImportError, OSError):
+        return None
+
+
+def _legacy_sessions(roots):
+    sessions = []
+    for number, root in enumerate(roots):
+        if not any(Path(root).glob("*/trail.jsonl")):
+            continue
+        legacy = number > 0 or Path(root).parts[-2:] == ("artifacts", "agent-sessions")
+        sessions.append({
+            "id": "legacy-history" if legacy else "run-history",
+            "title": "Legacy history" if legacy else "Run history",
+            "status": "archived", "temporary": False, "archived": True, "legacy": True,
+            "root": str(Path(root).resolve()), "revision": 0,
+        })
+    return sessions
+
+
+def _store_sessions(store, roots, include_archived=True):
+    sessions = list(store.list_sessions(include_archived=include_archived)) if store else []
+    existing = {item.get("id") for item in sessions}
+    sessions.extend(item for item in _legacy_sessions(roots) if item["id"] not in existing)
+    return sessions
+
+
+def _history_snapshot(roots, session_id):
+    legacy = session_id == "legacy-history"
+    selected = [root for number, root in enumerate(roots)
+                if (number > 0 or Path(root).parts[-2:] == ("artifacts", "agent-sessions")) == legacy]
+    runs = all_runs(selected or roots)
+    return {
+        "session": next((s for s in _legacy_sessions(roots) if s["id"] == session_id),
+                        {"id": session_id, "title": "Run history", "legacy": True, "archived": True}),
+        "runs": runs, "requests": [], "revision": 0, "cursor": 0,
+    }
+
+
+def _snapshot(store, roots, session_id):
+    if session_id in {"run-history", "legacy-history"}:
+        return _history_snapshot(roots, session_id)
+    if not store:
+        raise KeyError(session_id)
+    snapshot = store.snapshot(session_id)
+    recent = store.events(session_id, after=max(0, snapshot["cursor"] - 200), limit=200)
+    snapshot["events"] = [e for e in recent["events"] if e["seq"] <= snapshot["cursor"]]
+    return snapshot
+
+
+def _event_delta(store, session_id, after, limit=200):
+    if not store or session_id in {"run-history", "legacy-history"}:
+        return {"events": [], "cursor": after, "revision": 0, "truncated": False}
+    return store.events(session_id, after=after, limit=limit)
+
+
+def _matching_live_sessions(session_id):
+    matches = []
+    for folder, info in live_sessions().items():
+        if info.get("testing_session_id") == session_id:
+            matches.append((folder, info))
+    return matches
+
+
+def _safe_live_state(session_id, folder, info):
+    try:
+        state = live_state(info)
+    except (httpx.HTTPError, ValueError, OSError):
+        return None
+    if (state.get("session_id") or info.get("testing_session_id")) != session_id:
+        return None
+    run_id = state.get("run_id") or info.get("run_id")
+    clean = {key: value for key, value in state.items() if key in LIVE_FIELDS}
+    clean["session_id"], clean["run_id"] = session_id, run_id
+    observation = clean.get("observation") or {}
+    # A frame without a run-bound observation may be left over from an earlier test.  It is still
+    # available through recorded replay, but must never be presented as the current live screen.
+    if not run_id or not (observation.get("id") or observation.get("frame_id")):
+        clean.pop("frame", None)
+    return run_id or folder, clean
+
+
+def _speech(text):
+    import hashlib
+
+    from .. import speech
+
+    cache = cache_dir() / "speech"
+    cache.mkdir(exist_ok=True)
+    key = hashlib.sha1(f"{speech.provider()}|{speech.fixed_voice()}|{text}".encode()).hexdigest()
+    hit = next(cache.glob(key + ".*"), None)
+    if hit:
+        return hit.read_bytes(), "audio/wav" if hit.suffix == ".wav" else "audio/mpeg"
+    audio, mime = speech.synthesize(text, None)
+    (cache / f"{key}.{'wav' if 'wav' in mime else 'mp3'}").write_bytes(audio)
+    return audio, mime
+
+
+def create_app(roots, token, project_root=None, poll_interval=0.25, viewer_event_limit=64):
+    """Build the aiohttp dashboard application (also used by integration tests)."""
+    roots = [Path(root).resolve() for root in roots]
+    store = _coordination_store(project_root or _project_for_roots(roots))
     page = Path(__file__).with_name("dashboard.html")
+    replay_page = Path(__file__).with_name("replay.html")
     bluetooth = "true" if setting("REVERIE_BLUETOOTH_AUDIO", "0").lower() in {"1", "true", "on", "yes"} \
         else "false"
 
-    class Handler(BaseHTTPRequestHandler):
-        def send(self, status, body, mime="application/json"):
-            body = body if isinstance(body, bytes) else json.dumps(body, default=str).encode()
-            self.send_response(status)
-            self.send_header("Content-Type", mime)
-            self.send_header("Content-Length", str(len(body)))
-            self.send_header("Cache-Control", "no-store")
-            self.end_headers()
-            self.wfile.write(body)
+    @web.middleware
+    async def headers(request, handler):
+        try:
+            response = await handler(request)
+        except ValueError as error:
+            response = web.json_response({"error": str(error)}, status=409)
+        response.headers["Cache-Control"] = "no-store"
+        response.headers["X-Content-Type-Options"] = "nosniff"
+        response.headers["Referrer-Policy"] = "no-referrer"
+        return response
 
-        def roots(self):
-            extra = {Path(i["trail"]).parent.resolve() for i in live_sessions().values()}
-            return list(dict.fromkeys([*roots, *extra]))
+    app = web.Application(middlewares=[headers], client_max_size=2 * 1024 * 1024)
 
-        def do_GET(self):
-            url = urlparse(self.path)
-            query = parse_qs(url.query)
-            if url.path == "/":
-                return self.send(200, page.read_text().replace("__BLUETOOTH__", bluetooth).encode(),
-                                 "text/html; charset=utf-8")
-            if url.path == "/api/index":
-                return self.send(200, index(self.roots()))
-            if url.path == "/replay":
-                return self.send(200, Path(__file__).with_name("replay.html").read_text()
-                                 .replace("__BLUETOOTH__", bluetooth).encode(), "text/html; charset=utf-8")
-            if url.path == "/api/deck":
-                return self.send(200, deck(self.roots(), query.get("run", [None])[0], query.get("suite", [None])[0]))
-            if url.path == "/api/run":
-                run = run_detail(self.roots(), query.get("id", [""])[0])
-                return self.send(200, run) if run else self.send(404, {"error": "No such run"})
-            if url.path == "/api/speech":
-                text = query.get("text", [""])[0].strip()[:600]
-                if not text:
-                    return self.send(400, {"error": "No text"})
-                import hashlib
+    def auth_kind(request, allow_query=True):
+        if _same_token(request.headers.get("X-Laya-Agent-Token"), token):
+            return "header"
+        if _same_token(request.cookies.get(DASHBOARD_COOKIE), token):
+            return "cookie"
+        if allow_query and request.method == "GET" and _same_token(request.query.get("token"), token):
+            return "query"
+        return None
 
-                from .. import speech
+    def require_auth(request, allow_query=True):
+        kind = auth_kind(request, allow_query)
+        if not kind:
+            raise web.HTTPUnauthorized(text="Dashboard authentication required")
+        return kind
 
-                cache = cache_dir() / "speech"
-                cache.mkdir(exist_ok=True)
-                key = hashlib.sha1(f"{speech.provider()}|{speech.fixed_voice()}|{text}".encode()).hexdigest()
-                hit = next(cache.glob(key + ".*"), None)
-                if hit:
-                    mime = "audio/wav" if hit.suffix == ".wav" else "audio/mpeg"
-                    return self.send(200, hit.read_bytes(), mime)
-                try:
-                    audio, mime = speech.synthesize(text, None)
-                except Exception as error:  # Narration is optional; the page keeps working without it.
-                    return self.send(502, {"error": f"{type(error).__name__}: {error}"})
-                (cache / f"{key}.{'wav' if 'wav' in mime else 'mp3'}").write_bytes(audio)
-                return self.send(200, audio, mime)
-            if url.path == "/api/frame":
-                folder, name = query.get("dir", [""])[0], query.get("file", [""])[0]
-                if "/" in folder or folder.startswith(".") or not FRAME.match(name):
-                    return self.send(400, {"error": "Bad frame path"})
-                for root in self.roots():
-                    target = root / folder / "frames" / name
-                    if target.is_file():
-                        return self.send(200, target.read_bytes(), "image/jpeg")
-                return self.send(404, {"error": "No such frame"})
-            return self.send(404, {"error": "Not found"})
+    def require_origin(request, kind):
+        origin = request.headers.get("Origin")
+        if not origin:
+            if kind == "header":
+                return
+            raise web.HTTPForbidden(text="Origin required")
+        parsed = urlparse(origin)
+        if parsed.scheme not in {"http", "https"} or parsed.netloc != request.host \
+                or parsed.hostname not in {"127.0.0.1", "localhost", "::1"}:
+            raise web.HTTPForbidden(text="Origin rejected")
 
-        def do_POST(self):
-            request = json.loads(self.rfile.read(int(self.headers.get("Content-Length", "0"))) or b"{}")
-            if urlparse(self.path).path != "/api/reply":
-                return self.send(404, {"error": "Not found"})
-            info = live_sessions().get(request.get("dir", ""))
-            if not info:
-                return self.send(404, {"error": "That session is not running"})
-            return self.send(200, session_call(info, "reply", {"choice": request.get("choice", "Continue"),
-                                                               "text": request.get("text", "")}))
+    def current_roots():
+        extra = {Path(info["trail"]).parent.resolve() for info in live_sessions().values()
+                 if info.get("trail")}
+        return list(dict.fromkeys([*roots, *extra]))
 
-        def log_message(self, *_args):
+    async def home(request):
+        if _same_token(request.query.get("token"), token):
+            response = web.Response(status=303, headers={"Location": "/"})
+            response.set_cookie(DASHBOARD_COOKIE, token, httponly=True, samesite="Strict", path="/")
+            return response
+        require_auth(request, allow_query=False)
+        return web.Response(text=page.read_text().replace("__BLUETOOTH__", bluetooth),
+                            content_type="text/html", charset="utf-8")
+
+    async def replay(request):
+        require_auth(request)
+        return web.Response(text=replay_page.read_text().replace("__BLUETOOTH__", bluetooth),
+                            content_type="text/html", charset="utf-8")
+
+    async def api_sessions(request):
+        require_auth(request)
+        sessions = await asyncio.to_thread(_store_sessions, store, current_roots(), True)
+        return web.json_response({"sessions": sessions})
+
+    async def api_index(request):
+        require_auth(request)
+        active_roots = current_roots()
+        payload, sessions = await asyncio.gather(
+            asyncio.to_thread(index, active_roots),
+            asyncio.to_thread(_store_sessions, store, active_roots, True),
+        )
+        payload["sessions"] = sessions
+        return web.json_response(payload)
+
+    async def api_session(request):
+        require_auth(request)
+        try:
+            payload = await asyncio.to_thread(_snapshot, store, current_roots(), request.match_info["session_id"])
+        except (KeyError, ValueError):
+            raise web.HTTPNotFound(text="No such testing session")
+        return web.json_response(payload, dumps=lambda value: json.dumps(value, default=str))
+
+    async def api_runs(request):
+        require_auth(request)
+        payload = await asyncio.to_thread(store.snapshot, request.match_info["session_id"],
+                                          int(request.query.get("offset", "0")),
+                                          int(request.query.get("limit", "200")))
+        return web.json_response(payload)
+
+    async def api_deck(request):
+        require_auth(request)
+        payload = await asyncio.to_thread(deck, current_roots(), request.query.get("run"), request.query.get("suite"))
+        return web.json_response(payload)
+
+    async def api_run(request):
+        require_auth(request)
+        run = await asyncio.to_thread(run_detail, current_roots(), request.query.get("id", ""))
+        if not run:
+            raise web.HTTPNotFound(text=json.dumps({"error": "No such run"}), content_type="application/json")
+        return web.json_response(run)
+
+    async def api_frame(request):
+        require_auth(request)
+        folder, name = request.query.get("dir", ""), request.query.get("file", "")
+        if "/" in folder or folder.startswith(".") or not FRAME.match(name):
+            raise web.HTTPBadRequest(text=json.dumps({"error": "Bad frame path"}), content_type="application/json")
+        for root in current_roots():
+            target = root / folder / "frames" / name
+            if target.is_file():
+                return web.Response(body=await asyncio.to_thread(target.read_bytes), content_type="image/jpeg")
+        raise web.HTTPNotFound(text=json.dumps({"error": "No such frame"}), content_type="application/json")
+
+    async def api_speech(request):
+        require_auth(request)
+        text = request.query.get("text", "").strip()[:600]
+        if not text:
+            raise web.HTTPBadRequest(text=json.dumps({"error": "No text"}), content_type="application/json")
+        try:
+            audio, mime = await asyncio.to_thread(_speech, text)
+        except Exception as error:  # Narration is optional; the dashboard remains usable.
+            raise web.HTTPBadGateway(text=json.dumps({"error": f"{type(error).__name__}: {error}"}),
+                                     content_type="application/json")
+        return web.Response(body=audio, content_type=mime)
+
+    async def api_reply(request):
+        kind = require_auth(request, allow_query=False)
+        require_origin(request, kind)
+        body = await request.json()
+        info = live_sessions().get(body.get("dir", ""))
+        if not info:
+            raise web.HTTPNotFound(text=json.dumps({"error": "That session is not running"}),
+                                   content_type="application/json")
+        payload = await asyncio.to_thread(session_call, info, "reply",
+                                          {"choice": body.get("choice", "Continue"), "text": body.get("text", "")})
+        return web.json_response(payload)
+
+    async def api_action(request):
+        kind = require_auth(request, allow_query=False)
+        require_origin(request, kind)
+        session_id = request.match_info["session_id"]
+        body = await request.json()
+        action, run_id = body.get("action"), body.get("run_id")
+        runs = await asyncio.to_thread(store.list_runs, session_id, True) if store else []
+        run = next((r for r in runs if r["id"] == run_id), None)
+        if run_id and not run:
+            raise web.HTTPNotFound(text="Attempt is not in this testing session")
+        if action in {"pin", "unpin", "triage"}:
+            if not run:
+                raise web.HTTPBadRequest(text="Select an attempt")
+            if action == "triage":
+                result = await asyncio.to_thread(store.triage_run, run_id, body.get("status"),
+                                                 note=body.get("note", ""))
+            else:
+                result = await asyncio.to_thread(store.pin_run, run_id, action == "pin")
+        elif action == "audio_source":
+            source = body.get("source_run_id")
+            target = next((r for r in runs if r["id"] == source), None)
+            if not target:
+                raise web.HTTPNotFound(text="Narration source is not in this session")
+            result = await asyncio.gather(*(asyncio.to_thread(session_call, info, "audio",
+                          {"muted": info.get("name") != target.get("browser_session")})
+                          for _, info in _matching_live_sessions(session_id)))
+        elif action in {"claim", "resolve"}:
+            request_id = body.get("request_id")
+            requests = await asyncio.to_thread(store.list_requests, session_id)
+            if not any(r["id"] == request_id for r in requests):
+                raise web.HTTPNotFound(text="Request is not in this testing session")
+            if action == "claim":
+                result = await asyncio.to_thread(store.claim_request, request_id, body.get("owner", "human"))
+            else:
+                result = await asyncio.to_thread(store.resolve_request, request_id, body.get("result", {}),
+                                                 owner=body.get("owner"))
+        else:
+            commands = {"pause": "pilot_pause", "resume": "pilot", "take_control": "take_control",
+                        "release_control": "release_control", "audio": "audio", "inspect": "inspect"}
+            command = commands.get(action)
+            matches = _matching_live_sessions(session_id)
+            if run:
+                matches = [(folder, info) for folder, info in matches
+                           if info.get("name") == run.get("browser_session")]
+            if not command or not matches:
+                raise web.HTTPNotFound(text=json.dumps({"error": "No matching live worker or action"}),
+                                       content_type="application/json")
+            arguments = {key: value for key, value in body.items()
+                         if key not in {"action", "session_id", "run_id"}}
+            result = await asyncio.to_thread(session_call, matches[0][1], command, arguments)
+        return web.json_response(result or {"ok": True}, dumps=lambda value: json.dumps(value, default=str))
+
+    async def websocket(request):
+        kind = require_auth(request, allow_query=False)
+        require_origin(request, kind)
+        session_id = request.query.get("session", "")
+        if not session_id:
+            raise web.HTTPBadRequest(text="A testing session is required")
+        try:
+            after = max(0, int(request.query.get("after", "0")))
+        except ValueError:
+            raise web.HTTPBadRequest(text="Bad event cursor")
+
+        ws = web.WebSocketResponse(heartbeat=30, max_msg_size=64 * 1024)
+        await ws.prepare(request)
+        buffer = ViewerBuffer(event_limit=viewer_event_limit)
+        cursor, last_live = after, {}
+        delivery_revision = {}
+        cursor_lock = asyncio.Lock()
+
+        async def send_snapshot(reason):
+            nonlocal cursor
+            try:
+                async with cursor_lock:
+                    snapshot = await asyncio.to_thread(_snapshot, store, current_roots(), session_id)
+                    revision = int(snapshot.get("revision") or 0)
+                    cursor = int(snapshot["cursor"])
+                    last_live.clear()  # Resend the latest frame after a slow-viewer resync.
+                    await ws.send_json({"type": "snapshot", "session_id": session_id, "cursor": cursor,
+                                        "revision": revision, "reason": reason, "data": snapshot})
+            except (KeyError, ValueError):
+                await ws.send_json({"type": "error", "error": "No such testing session"})
+
+        async def sender():
+            while not ws.closed:
+                message = await buffer.get()
+                if message is None:
+                    return
+                if message["type"] == "resync_required":
+                    await send_snapshot(message["reason"])
+                else:
+                    await ws.send_json(message)
+
+        async def producer():
+            session_identity = tuple((s["id"], s.get("title"), s.get("state"))
+                                     for s in await asyncio.to_thread(_store_sessions, store, current_roots()))
+            nonlocal cursor
+            ping_at = asyncio.get_running_loop().time() + 5
+            while not ws.closed:
+                async with cursor_lock:
+                    delta = await asyncio.to_thread(_event_delta, store, session_id, cursor, 200)
+                    if delta.get("truncated"):
+                        await buffer.put_control({"type": "resync_required", "reason": "cursor_miss"})
+                        cursor = int(delta.get("cursor") or cursor)
+                    else:
+                        for event in delta.get("events") or []:
+                            seq = int(event.get("seq") or 0)
+                            if seq <= cursor:
+                                continue
+                            cursor = seq
+                            await buffer.put_event({"type": "event", "session_id": session_id, "cursor": cursor,
+                                                    "revision": int(delta.get("revision") or 0), "event": event})
+                        cursor = max(cursor, int(delta.get("cursor") or 0))
+
+                sessions = await asyncio.to_thread(_store_sessions, store, current_roots())
+                identity = tuple((s["id"], s.get("title"), s.get("state")) for s in sessions)
+                if identity != session_identity:
+                    session_identity = identity
+                    await buffer.put_control({"type": "sessions", "sessions": sessions})
+                matches = await asyncio.to_thread(_matching_live_sessions, session_id)
+                states = await asyncio.gather(*(asyncio.to_thread(_safe_live_state, session_id, folder, info)
+                                                for folder, info in matches))
+                for item in states:
+                    if not item:
+                        continue
+                    run_id, state = item
+                    revision = int(state.get("revision") or 0)
+                    observation = state.get("observation") or {}
+                    identity = (revision, observation.get("id"), observation.get("frame_id"),
+                                state.get("status"), state.get("caption"), state.get("frame_captured_at"),
+                                json.dumps(state.get("narration"), sort_keys=True),
+                                json.dumps(state.get("controls"), sort_keys=True))
+                    if last_live.get(run_id) == identity:
+                        continue
+                    last_live[run_id] = identity
+                    delivery_revision[run_id] = max(revision, delivery_revision.get(run_id, 0) + 1)
+                    await buffer.put_live(run_id, {"type": "live", "session_id": session_id,
+                                                   "run_id": run_id, "revision": delivery_revision[run_id],
+                                                   "sent_at": time.time(), "state": state})
+                now = asyncio.get_running_loop().time()
+                if now >= ping_at:
+                    await buffer.put_control({"type": "ping", "at": now})
+                    ping_at = now + 5
+                await asyncio.sleep(poll_interval)
+
+        if after:
+            delta = await asyncio.to_thread(_event_delta, store, session_id, after, 200)
+            if delta.get("truncated") or after > int(delta.get("watermark", 0)):
+                await send_snapshot("cursor_miss")
+            else:
+                events = [event for event in delta.get("events") or []
+                          if int(event.get("seq") or 0) > after]
+                cursor = max(after, int(delta.get("cursor") or 0))
+                await ws.send_json({"type": "catchup", "session_id": session_id, "events": events,
+                                    "cursor": cursor, "revision": int(delta.get("revision") or 0)})
+        else:
+            await send_snapshot("initial")
+
+        send_task, produce_task = asyncio.create_task(sender()), asyncio.create_task(producer())
+        try:
+            async for message in ws:
+                if message.type == WSMsgType.TEXT:
+                    try:
+                        incoming = json.loads(message.data)
+                    except ValueError:
+                        continue
+                    if incoming.get("type") == "pong":
+                        continue
+                    if incoming.get("type") == "resync":
+                        await buffer.put_control({"type": "resync_required", "reason": "client_request"})
+                elif message.type in {WSMsgType.ERROR, WSMsgType.CLOSE}:
+                    break
+        finally:
+            await buffer.close()
+            for task in (send_task, produce_task):
+                task.cancel()
+            await asyncio.gather(send_task, produce_task, return_exceptions=True)
+        return ws
+
+    app.router.add_get("/", home)
+    app.router.add_get("/replay", replay)
+    app.router.add_get("/api/index", api_index)
+    app.router.add_get("/api/sessions", api_sessions)
+    app.router.add_get("/api/session/{session_id}", api_session)
+    app.router.add_get("/api/session/{session_id}/runs", api_runs)
+    app.router.add_get("/api/deck", api_deck)
+    app.router.add_get("/api/run", api_run)
+    app.router.add_get("/api/frame", api_frame)
+    app.router.add_get("/api/speech", api_speech)
+    app.router.add_post("/api/reply", api_reply)
+    app.router.add_post("/api/session/{session_id}/action", api_action)
+    app.router.add_get("/api/ws", websocket)
+    return app
+
+
+async def _serve(args):
+    roots = [Path(root).resolve() for root in args.root]
+    path = dashboard_file()
+    token = None
+    if path.exists():  # Keep the URL and browser cookie stable across restarts.
+        try:
+            token = json.loads(path.read_text()).get("token")
+        except (OSError, ValueError):
             pass
-
+    token = token or secrets.token_urlsafe(24)
+    app = create_app(roots, token)
+    runner = web.AppRunner(app, access_log=None)
+    await runner.setup()
+    site = web.TCPSite(runner, "127.0.0.1", args.port)
     try:
-        server = ThreadingHTTPServer(("127.0.0.1", args.port), Handler)
-    except OSError:  # The preferred port is taken; any free loopback port works (the URL is in dashboard.json).
-        server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
-    server.daemon_threads = True
-    path.write_text(json.dumps({"pid": os.getpid(), "port": server.server_address[1], "token": token,
-                                "roots": [str(r) for r in roots]}))
+        await site.start()
+    except OSError:  # Preferred port occupied; publish the selected free port in dashboard.json.
+        site = web.TCPSite(runner, "127.0.0.1", 0)
+        await site.start()
+    port = site._server.sockets[0].getsockname()[1]
+    path.write_text(json.dumps({"pid": os.getpid(), "port": port, "token": token,
+                                "roots": [str(root) for root in roots]}))
     path.chmod(0o600)
-    threading.Thread(target=server.serve_forever, daemon=True).start()
     try:
-        threading.Event().wait()
+        await asyncio.Event().wait()
     finally:
-        server.shutdown()
+        await runner.cleanup()
+
+
+def serve(args):
+    asyncio.run(_serve(args))
 
 
 def main(argv=None):
@@ -526,7 +927,10 @@ def main(argv=None):
     args = parser.parse_args(argv)
     args.root = args.root or [str(r) for r in run_roots()]
     load_environment()  # Narration playback uses the same speech provider and voice as the sessions.
-    serve(args)
+    try:
+        serve(args)
+    except KeyboardInterrupt:
+        pass
 
 
 if __name__ == "__main__":

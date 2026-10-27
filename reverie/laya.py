@@ -327,6 +327,30 @@ class LayaPolicy:
         self.tokens += result["usage"]["input_tokens"]
         return result["answers"]
 
+    def choose_bounded(self, qid, criteria, state, instructions, limit=20):
+        """Ask bounded range questions until every candidate is directly reachable."""
+        items = list(criteria.items())
+        depth = 0
+        confidence = 1.0
+        while len(items) > limit:
+            size = (len(items) + limit - 1) // limit
+            groups = [items[start:start + size] for start in range(0, len(items), size)]
+            ranges = {}
+            for i, group in enumerate(groups):
+                first, last = str(group[0][1])[:40], str(group[-1][1])[:40]
+                ranges[str(i)] = f"{first} – {last} ({len(group)} choices)"
+            range_id = f"{qid}_range_{depth}"
+            answer = self.ask(state, {range_id: {
+                "type": "choice", "instructions": instructions, "criteria": ranges,
+            }})[range_id]
+            confidence = min(confidence, answer["confidence"])
+            items = groups[int(answer["choice"])]
+            depth += 1
+        answer = self.ask(state, {qid: {
+            "type": "choice", "instructions": instructions, "criteria": dict(items),
+        }})[qid]
+        return {**answer, "confidence": min(confidence, answer["confidence"])}
+
     def pick(self, qid, candidates, state, instructions, text, limit=20, bonus=None, allow_none=False,
              top_tier=False, margin=1):
         date = month_day(text)
@@ -357,6 +381,25 @@ class LayaPolicy:
             self.typed = False
             self.frozen |= self.met
         elements = observed(page)
+        buckets = [a for a in page["actions"] if a.get("kind") == "expand"]
+        self.answers, self.questions, self.tokens = {}, {}, 0
+        if buckets:
+            criteria = {a["id"]: f"{a['label']} ({a.get('count', '?')} actions)" for a in buckets}
+            if elements:
+                criteria["visible"] = "Use the visible actions"
+            answer = self.choose_bounded("bucket", criteria, self.goal,
+                                         "Which group contains the next action for the goal?")
+            if answer["choice"] != "visible":
+                action = next(a for a in buckets if a["id"] == answer["choice"])
+                probability = answer["probabilities"][answer["choice"]]
+                return {"choice": action["id"], "operation": "EXPAND", "target": None, "text": None,
+                        "action_node": action.get("node"), "action_kind": "expand", "action_value": None,
+                        "action_label": action.get("label"), "confidence": answer["confidence"],
+                        "probabilities": {action["id"]: probability}, "operation_probabilities": {"EXPAND": probability},
+                        "target_probabilities": {}, "target_confidence": None, "raw_answers": self.answers,
+                        "model": laya().model_name, "usage": {"input_tokens": self.tokens, "output_tokens": 0},
+                        "latency_ms": round((time.perf_counter() - started) * 1000),
+                        "request": {"plan": self.plan, "questions": self.questions}}
         if self.plan is None:
             labels = list(dict.fromkeys(display(e) for e in elements if plannable(e)))
             self.plan, self.plan_meta = plan_goal(self.goal, labels)
@@ -487,11 +530,10 @@ class LayaPolicy:
                 similar = [o for o in e["options"] if words(option_label(o)) & words(r["value"])]
                 if exact or len(similar) == 1:
                     return "SELECT", e, (exact or similar)[0], None, "select", i, None
-                answer = self.ask(state, {f"select_{i}": {
-                    "type": "choice",
-                    "instructions": f"Which option sets {r['what']} to {r['value']}?",
-                    "criteria": {str(n): option_label(o) for n, o in enumerate(e["options"])},
-                }})[f"select_{i}"]
+                answer = self.choose_bounded(
+                    f"select_{i}", {str(n): option_label(o) for n, o in enumerate(e["options"])}, state,
+                    f"Which option sets {r['what']} to {r['value']}?",
+                )
                 option = e["options"][int(answer["choice"])]
                 return "SELECT", e, option, (e, answer), "select", i, None
             return "CLICK", e, e["actions"]["click"], None, "toggle" if e["role"] in TOGGLES else "open", i, None

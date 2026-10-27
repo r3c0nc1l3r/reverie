@@ -4,9 +4,10 @@ import base64
 import time
 from pathlib import Path
 
+from .actions import bounded
 from .browser import Browser, StalePage
 from .laya import LayaPolicy, laya
-from .model import action_space, choose, field_context, field_text
+from .model import action_space, choose, decision_images, field_context, field_text, resolve_decision_engine
 from .questions import MAX_STEPS
 
 
@@ -27,10 +28,7 @@ class Agent:
             raise ValueError("Supply a task")
         plan = [task]
         self.pending_text = None
-        # Hosted Jev decisions by default; local Laya (laya.cpp or MLX) when chosen.
-        decision_engine = decision_engine or "jev"
-        if decision_engine not in {"laya", "jev"}:
-            raise ValueError("Decision engine must be laya or jev")
+        decision_engine = resolve_decision_engine(decision_engine)
         self.policy = LayaPolicy(task) if decision_engine == "laya" else None
         if self.policy:
             laya()  # Load and warm the local model before the task clock starts.
@@ -38,7 +36,8 @@ class Agent:
         self.owns_browser = browser is None
         self.browser = browser or Browser(url)
         self.record_dir = Path(record_dir) if record_dir else None
-        self.observation_mode = observation_mode or ("either" if screenshots else "dom")
+        hosted_images = decision_engine in {"jev", "liquid"} and decision_images(decision_engine)
+        self.observation_mode = "image" if hosted_images else observation_mode or ("either" if screenshots else "dom")
         if self.observation_mode not in {"image", "dom", "either"}:
             raise ValueError("Observation mode must be image, dom, or either")
         self.screenshots = self.observation_mode != "dom" or bool(record_dir)
@@ -73,6 +72,40 @@ class Agent:
         if self.record_dir and page.get("screenshot") and not page.get("screenshot_stale"):
             self.record_dir.mkdir(parents=True, exist_ok=True)
             (self.record_dir / "000000.jpg").write_bytes(base64.b64decode(page["screenshot"]))
+
+    def _model_view(self):
+        """Build a bounded view for standalone runs and retain its navigation path."""
+        page = self.state["page"]
+        if getattr(self, "_view_page", None) is not page:
+            self._view_page = page
+            self._view_root = bounded(page.get("actions", []), page.setdefault("action_buckets", {}), 250)
+        buckets = page.get("action_buckets", {})
+        current, path = self._view_root, []
+        for ref in getattr(self, "_view_path", []):
+            entry = next((a for a in current if a.get("id") == ref and a.get("kind") == "expand"), None)
+            if not entry or entry.get("bucket") not in buckets:
+                break
+            path.append(ref)
+            current = buckets[entry["bucket"]]
+        self._view_path = path
+        if path:
+            current = list(current) + [
+                {"id": "bucket_back", "kind": "expand", "bucket": "__back__", "label": "Back"},
+                {"id": "bucket_root", "kind": "expand", "bucket": "__root__", "label": "All actions"},
+            ]
+        page["actions"] = current
+
+    def _expand(self, action):
+        bucket = action.get("bucket")
+        if bucket == "__root__":
+            self._view_path = []
+        elif bucket == "__back__":
+            self._view_path = self._view_path[:-1]
+        elif bucket in self.state["page"].get("action_buckets", {}):
+            self._view_path.append(action["id"])
+        else:
+            raise StalePage("Action bucket is no longer available. Observe and choose again.")
+        self._model_view()
 
     def snapshot(self):
         return {
@@ -121,6 +154,8 @@ class Agent:
                     screenshot=self.screenshots,
                     screenshot_fallback=self.screenshot_fallback,
                 )
+            if not getattr(self, "_session_managed", False):
+                self._model_view()
             state["decision"] = None
             if state["status"] in {"done", "blocked", "aborted"}:
                 raise ValueError("This run has stopped. Start a fresh demo.")
@@ -130,11 +165,12 @@ class Agent:
             if policy:
                 planned = policy.plan is not None
                 state["decision"] = policy.choose(state["page"], state["history"])
-                if not planned:
+                if not planned and policy.plan is not None:
                     state["goal_plan"] = policy.plan
                     state["text_calls"].append({**policy.plan_meta, "field": "goal plan", "value": policy.plan})
             else:
-                state["decision"] = choose(state["page"], state["goal"], state["history"])
+                state["decision"] = choose(state["page"], state["goal"], state["history"], engine="liquid") \
+                    if state["decision_engine"] == "liquid" else choose(state["page"], state["goal"], state["history"])
             state["decisions"].append(
                 {
                     **state["decision"],
@@ -158,32 +194,34 @@ class Agent:
                 state["plan_index"] = int(selected == "DONE")
                 state["elapsed_ms"] = round((time.perf_counter() - state["started_at"]) * 1000)
                 return self.snapshot()
-            if decision.get("action_node") is not None:
-                action = next(
-                    (
-                        a
-                        for a in page["actions"]
-                        if a.get("node") == decision["action_node"]
-                        and a["kind"] == decision["action_kind"]
-                        and a.get("value") == decision.get("action_value")
-                    ),
-                    None,
-                )
-            else:
-                action = next((a for a in page["actions"] if a["id"] == selected), None)
+            action = next((a for a in page["actions"] if a["id"] == selected), None)
+            if action and decision.get("action_kind") and action["kind"] != decision["action_kind"]:
+                action = None
             if action is None:
                 raise StalePage("Chosen action changed before execution. Observe again.")
+            if action["kind"] == "expand":
+                if getattr(self, "_session_managed", False):
+                    raise ValueError("Bucket navigation belongs to the controlling session")
+                self._expand(action)
+                state["status"] = "ready"
+                return self.snapshot()
             if not state["browser"].fresh(page, action):
                 refreshed = state["browser"].observe(
                     screenshot=self.screenshots,
                     screenshot_fallback=self.screenshot_fallback,
                 )
+                candidates = list(refreshed["actions"])
+                for children in refreshed.get("action_buckets", {}).values():
+                    candidates.extend(children)
+                candidates = list({a["id"]: a for a in candidates}.values())
                 matches = [
                     candidate
-                    for candidate in refreshed["actions"]
+                    for candidate in candidates
                     if candidate.get("kind") == decision.get("action_kind", action["kind"])
                     and candidate.get("label") == decision.get("action_label", action["label"])
                     and candidate.get("value") == decision.get("action_value", action.get("value"))
+                    and candidate.get("option_index") == action.get("option_index")
+                    and candidate.get("option_label") == action.get("option_label")
                 ]
                 if refreshed["url"] != page["url"] or len(matches) != 1:
                     raise StalePage("Chosen action changed before execution. Observe again.")

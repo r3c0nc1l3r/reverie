@@ -1,5 +1,8 @@
 """TypeSafe decisions (optional cloud backend) and the OpenAI-compatible text model helpers."""
 
+import base64
+import binascii
+import io
 import json
 import math
 import os
@@ -11,14 +14,43 @@ from urllib.parse import urlparse
 import httpx
 
 from .questions import GOAL_PLAN, NEXT_ACTION, TARGET, TEXT_VALUE
+from .settings import setting
 
 CLIENT = httpx.Client(http2=True, timeout=25)
 OPENROUTER_JEV_ENDPOINT = "https://openrouter.ai/api/alpha/decisions"
 DEFAULT_REMOTE_DECISION_MODEL = "typesafe/jev-1.13"
+DEFAULT_LIQUID_DECISION_MODEL = "liquid/d1-ultra"
+
+
+def resolve_decision_engine(engine=None):
+    """Choose the decision engine, honoring current settings and legacy aliases."""
+    selected = (engine or setting("REVERIE_DECISION_ENGINE", "jev")).strip().lower()
+    if selected not in {"laya", "jev", "liquid"}:
+        raise ValueError("Decision engine must be laya, jev, or liquid")
+    return selected
 
 
 def remote_decision_model():
     return os.environ.get("REMOTE_DECISION_MODEL", DEFAULT_REMOTE_DECISION_MODEL)
+
+
+def liquid_decision_model():
+    return setting("REVERIE_LIQUID_MODEL", DEFAULT_LIQUID_DECISION_MODEL)
+
+
+def decision_images(engine):
+    """Whether the hosted decision engine uses a fresh visual observation."""
+    if engine not in {"jev", "liquid"}:
+        raise ValueError("Hosted decision engine must be jev or liquid")
+    value = setting("REVERIE_DECISION_IMAGES")
+    if value is None:
+        return engine == "liquid"
+    value = value.strip().lower()
+    if value in {"1", "true", "yes", "on"}:
+        return True
+    if value in {"0", "false", "no", "off"}:
+        return False
+    raise ValueError("REVERIE_DECISION_IMAGES must be on/off, true/false, yes/no, or 1/0")
 
 
 def post_json(url, key, body, headers=None):
@@ -64,7 +96,7 @@ def validate_choice(answer, ids):
             and abs(sum(probabilities.values()) - 1) < 0.02
             and probabilities[answer["choice"]] >= max(probabilities.values()) - 1e-6
         )
-    except (KeyError, TypeError, ValueError):
+    except (AttributeError, KeyError, TypeError, ValueError):
         valid = False
     if not valid:
         raise ValueError("Invalid TypeSafe response; no action executed.")
@@ -123,7 +155,28 @@ def action_space(actions):
     return elements, targets, controls
 
 
-def choose(state, goal, history):
+def _decision_image(state):
+    """Validate and normalize a fresh browser screenshot for the Decisions API."""
+    if not state.get("screenshot") or state.get("screenshot_stale"):
+        raise ValueError("A fresh screenshot is required for this decision engine; no action executed.")
+    try:
+        raw = base64.b64decode(state["screenshot"], validate=True)
+        from PIL import Image
+
+        with Image.open(io.BytesIO(raw)) as source:
+            source.load()
+            image = source.convert("RGB")
+        image.thumbnail((1280, 1280))
+        output = io.BytesIO()
+        image.save(output, "JPEG", quality=85)
+    except (binascii.Error, OSError, TypeError, ValueError):
+        raise ValueError("Screenshot is malformed; no action executed.") from None
+    return base64.b64encode(output.getvalue()).decode("ascii")
+
+
+def choose(state, goal, history, *, engine="jev"):
+    if engine not in {"jev", "liquid"}:
+        raise ValueError("Hosted decision engine must be jev or liquid")
     elements, targets, controls = action_space(state["actions"])
     labels = {
         "CLICK": "Click an element, button, menu option, autocomplete suggestion, or calendar day.",
@@ -149,16 +202,37 @@ def choose(state, goal, history):
             },
             "instructions": {"goal": goal, "operation": operation, "rules": [NEXT_ACTION, TARGET]},
         }
+    structured_state = {
+        "page": {k: state[k] for k in ("url", "title", "text")},
+        "elements": elements,
+        "recent_actions": [
+            {k: h.get(k) for k in ("action", "kind", "text", "page_changed")} for h in history[-10:]
+        ],
+    }
+    if decision_images(engine):
+        structured_state["page"]["viewport"] = {"width": state["w"], "height": state["h"]}
+        geometry = {}
+        nodes = []
+        for action in state["actions"]:
+            if action.get("kind") not in {"click", "fill", "select"}:
+                continue
+            node = action["node"]
+            if node not in nodes:
+                nodes.append(node)
+            if action.get("rect") and node not in geometry:
+                geometry[node] = action["rect"]
+        for element, node in zip(elements, nodes):
+            if node in geometry:
+                element["rect"] = geometry[node]
+        decision_state = [json.dumps(structured_state), {
+            "type": "image_url", "image_url": {"url": "data:image/jpeg;base64," + _decision_image(state)},
+        }]
+    else:
+        decision_state = structured_state
     body = {
-        "model": remote_decision_model(),
+        "model": liquid_decision_model() if engine == "liquid" else remote_decision_model(),
         "session_id": SESSION_ID,
-        "state": {
-            "page": {k: state[k] for k in ("url", "title", "text")},
-            "elements": elements,
-            "recent_actions": [
-                {k: h.get(k) for k in ("action", "kind", "text", "page_changed")} for h in history[-10:]
-            ],
-        },
+        "state": decision_state,
         "questions": questions,
     }
     started = time.perf_counter()
@@ -251,7 +325,7 @@ def endpoint(role="text"):
     REVERIE_PILOT_PROVIDER, REVERIE_PILOT_BASE_URL and REVERIE_PILOT_API_KEY (old names: LAYA_AGENT_PILOT_*), and falls back to the
     text model's settings for any it does not set. A provider (openrouter, opencode-go, deepseek) gives the
     base URL; opencode-go and openrouter also find their own key (OpenCode's auth.json, $OPENROUTER_API_KEY).
-    An explicit base URL or key always wins."""
+    An explicit base URL or key wins for HTTP providers. Codex ignores both and uses its CLI sign-in."""
     prefixes = ["REVERIE_PILOT_", "LAYA_AGENT_PILOT_", "TEXT_MODEL_"] if role == "pilot" else ["TEXT_MODEL_"]
 
     def first(name):
@@ -262,8 +336,10 @@ def endpoint(role="text"):
         return None
 
     provider = (first("PROVIDER") or "").strip().lower() or None
+    if provider == "codex":
+        return None, None, provider
     if provider and provider not in PROVIDERS:
-        raise ValueError(f"Unknown model provider {provider!r}; use one of {', '.join(sorted(PROVIDERS))}.")
+        raise ValueError(f"Unknown model provider {provider!r}; use one of {', '.join(sorted([*PROVIDERS, 'codex']))}.")
     base = (first("BASE_URL") or PROVIDERS.get(provider) or PROVIDERS["deepseek"]).rstrip("/")
     key = first("API_KEY")
     if not provider:
@@ -291,9 +367,16 @@ def reasoning_options(base, provider, reasoning_effort):
 
 
 def chat_json(system, context, model=None, max_tokens=1024, reasoning_effort=None, images=(), role="text"):
-    """One JSON-mode call to an OpenAI-compatible model. Local servers need no key.
+    """One JSON-mode call to Codex or an OpenAI-compatible model. Local servers need no key.
     `model` overrides TEXT_MODEL for one call; `role="pilot"` uses the pilot's endpoint (see `endpoint`)."""
     base, key, provider = endpoint(role)
+    if model is None and role == "pilot":
+        model = setting("REVERIE_PILOT_MODEL")
+    if provider == "codex":
+        from .codex_provider import chat_json as codex_chat_json
+
+        return codex_chat_json(system, context, model=model or os.environ.get("TEXT_MODEL") or "gpt-6.1-terra",
+                               max_tokens=max_tokens, reasoning_effort=reasoning_effort, images=images, role=role)
     if not key and not local_endpoint(base):
         raise ValueError("The text model needs TEXT_MODEL_API_KEY (or REVERIE_PILOT_API_KEY, or an opencode-go "
                          "key); no text is hardcoded or guessed by the executor.")
@@ -349,7 +432,15 @@ def plan_goal(goal, fields=(), attempts=3):
     context = {"goal": goal, "fields_on_page": list(fields)[:40]}
     for attempt in range(attempts):
         try:
-            return parse_plan(*chat_json(GOAL_PLAN, context))
+            output, meta = chat_json(GOAL_PLAN, context)
+            try:
+                return parse_plan(output, meta)
+            except ValueError:
+                if endpoint("text")[2] == "codex":
+                    from .codex_provider import CodexError
+
+                    raise CodexError("Codex returned an invalid goal plan; nothing executed.") from None
+                raise
         except ValueError as error:
             if "TEXT_MODEL_API_KEY" in str(error) or attempt == attempts - 1:
                 raise

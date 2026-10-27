@@ -79,8 +79,9 @@ def jev_session(tmp_path, monkeypatch, decision, engine="jev"):
     s = session(tmp_path)
     s.goal, s.hints, s.pending, s.agent, s.engine = "Type 'order 8' into Username", [], None, None, engine
     used = []
-    agent = Mock()
-    agent.state = {"status": "ready", "goal": s.goal, "history": [], "text_calls": [], "decision": decision}
+    agent = Mock(screenshots=False)
+    agent.state = {"status": "ready", "goal": s.goal, "history": [], "text_calls": [], "decision": decision,
+                   "decision_engine": engine}
     monkeypatch.setattr(Session, "autonomous", lambda self, goal=None, engine=None: used.append(engine) or agent)
     return s, used
 

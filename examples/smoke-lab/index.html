@@ -1,0 +1,133 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Reverie smoke lab</title>
+  <style>
+    :root { color-scheme: light; font-family: ui-sans-serif, system-ui, sans-serif; }
+    * { box-sizing: border-box; }
+    body { margin: 0; color: #172033; background: #f3f6fb; }
+    main { width: min(900px, calc(100% - 48px)); margin: 32px auto 140px; }
+    h1 { margin-bottom: 4px; }
+    .lede { margin-top: 0; color: #526079; }
+    .grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 18px; }
+    section { position: relative; min-height: 210px; padding: 20px; overflow: hidden; background: white;
+      border: 1px solid #d9e0ea; border-radius: 12px; box-shadow: 0 4px 16px #26365512; }
+    h2 { margin: 0 0 8px; font-size: 1.05rem; }
+    p { line-height: 1.45; }
+    button { min-height: 40px; padding: 8px 14px; border: 1px solid #3a64bd; border-radius: 7px;
+      color: white; background: #2858b8; font: inherit; cursor: pointer; }
+    button:disabled { cursor: wait; opacity: .58; }
+    .status { min-height: 24px; margin: 14px 0 0; color: #23447c; font-weight: 650; }
+    #submit-zone { position: relative; width: 250px; height: 92px; padding-top: 26px; }
+    #submit-order { width: 190px; }
+    #submit-cover { position: absolute; z-index: 5; inset: 10px 18px 6px 0; display: grid; place-items: center;
+      border: 2px dashed #ba384c; border-radius: 8px; color: #671b28; background: #ffe2e7f5;
+      font-size: .84rem; font-weight: 750; text-align: center; transform: translateX(320px); }
+    #submit-cover.armed { transform: none; }
+    #arm-cover, #remove-cover { margin-top: 12px; color: #263650; background: #edf2fa; border-color: #a9b8d0; }
+    #remove-cover { margin-left: 8px; }
+    #delayed-action { display: flex; align-items: center; gap: 9px; margin-top: 12px; }
+    #delayed-action[hidden] { display: none; }
+    #delayed-action img, #broken-icon img { width: 22px; height: 22px; }
+    #loading { display: none; align-items: center; gap: 8px; margin-top: 12px; color: #4d5e78; }
+    #loading.visible { display: flex; }
+    #spinner { width: 18px; height: 18px; border: 3px solid #c8d1df; border-top-color: #2858b8;
+      border-radius: 50%; animation: spin .65s linear infinite; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    #broken-icon { width: 52px; min-width: 52px; padding: 8px; }
+    #fallback { margin-left: 10px; color: #263650; background: #edf2fa; border-color: #a9b8d0; }
+    #tiny-target { width: 14px; min-width: 14px; height: 14px; min-height: 14px; padding: 0; margin-top: 18px;
+      border: 1px solid #e4e7eb; border-radius: 2px; color: #e4e7eb; background: #f7f8f9; font-size: 6px; }
+    .tiny-note { color: #6b7484; font-size: .82rem; }
+    @media (max-width: 700px) { .grid { grid-template-columns: 1fr; } }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>Reverie smoke lab</h1>
+    <p class="lede">A deterministic page for testing visual evidence and guarded browser actions.</p>
+    <div class="grid">
+      <section aria-labelledby="covered-title">
+        <h2 id="covered-title">Covered submit</h2>
+        <p>The submit control remains in the DOM while another layer intercepts its center point.</p>
+        <div id="submit-zone">
+          <button id="submit-order" type="button">Submit order</button>
+          <div id="submit-cover">Blocking overlay<br>intercepts the click</div>
+        </div>
+        <button id="arm-cover" type="button">Arm obstruction</button>
+        <button id="remove-cover" type="button">Remove obstruction</button>
+        <p class="status" id="submit-status" aria-live="polite"></p>
+      </section>
+
+      <section aria-labelledby="delayed-title">
+        <h2 id="delayed-title">Delayed icon</h2>
+        <p>The icon response is delayed by the local server. The action appears only after it loads.</p>
+        <button id="start-delay" type="button">Load delayed icon</button>
+        <div id="loading" role="status" aria-busy="false">
+          <span id="spinner" aria-label="Loading delayed icon"></span>
+          Loading icon…
+        </div>
+        <button id="delayed-action" type="button" hidden aria-label="Confirm delayed icon">
+          <img alt="" width="22" height="22"> <span>Confirm delayed icon</span>
+        </button>
+        <p class="status" id="delayed-status" aria-live="polite"></p>
+      </section>
+
+      <section aria-labelledby="missing-title">
+        <h2 id="missing-title">Permanently missing visual</h2>
+        <p>The primary action has a semantic name, but its only visible content is a broken image.</p>
+        <button id="broken-icon" type="button" aria-label="Archive record">
+          <img src="/icons/permanently-missing.svg" alt="">
+        </button>
+        <button id="fallback" type="button">Archive using text fallback</button>
+        <p class="status" id="archive-status" aria-live="polite"></p>
+      </section>
+
+      <section aria-labelledby="tiny-title">
+        <h2 id="tiny-title">Tiny low contrast target</h2>
+        <p class="tiny-note">This target is intentionally difficult to see and should be inspected before use.</p>
+        <button id="tiny-target" type="button" aria-label="Tiny low contrast target">·</button>
+        <p class="status" id="tiny-status" aria-live="polite"></p>
+      </section>
+    </div>
+  </main>
+  <script>
+    const byId = id => document.getElementById(id);
+    byId('submit-order').addEventListener('click', () => { byId('submit-status').textContent = 'Order submitted'; });
+    byId('arm-cover').addEventListener('click', () => {
+      byId('submit-status').textContent = 'Obstruction armed';
+      setTimeout(() => byId('submit-cover').classList.add('armed'), 3000);
+    });
+    byId('remove-cover').addEventListener('click', () => {
+      byId('submit-cover').remove();
+      byId('submit-status').textContent = 'Obstruction removed';
+    });
+    byId('start-delay').addEventListener('click', () => {
+      const loading = byId('loading');
+      const action = byId('delayed-action');
+      const image = action.querySelector('img');
+      byId('start-delay').disabled = true;
+      loading.classList.add('visible');
+      loading.setAttribute('aria-busy', 'true');
+      byId('spinner').setAttribute('role', 'progressbar');
+      image.addEventListener('load', () => {
+        loading.classList.remove('visible');
+        loading.setAttribute('aria-busy', 'false');
+        byId('spinner').removeAttribute('role');
+        action.hidden = false;
+      }, { once: true });
+      image.src = '/icons/delayed.svg?request=1';
+    });
+    byId('delayed-action').addEventListener('click', () => {
+      byId('delayed-status').textContent = 'Delayed icon confirmed';
+    });
+    byId('broken-icon').addEventListener('click', () => { byId('archive-status').textContent = 'Archived'; });
+    byId('fallback').addEventListener('click', () => {
+      byId('archive-status').textContent = 'Archived with visible text fallback';
+    });
+    byId('tiny-target').addEventListener('click', () => { byId('tiny-status').textContent = 'Tiny target activated'; });
+  </script>
+</body>
+</html>
