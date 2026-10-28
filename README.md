@@ -6,7 +6,7 @@ Reverie runs browser tests from Markdown specs. A decision engine makes each cli
 
 Screenshot masking is best effort: unsupported fields can stay visible. Do not use real secrets without your own review.
 
-Reverie is the agent operation mode of [laya-ultrafast](https://github.com/Command-Perception/laya-ultrafast) as its own project. The browser agent, DOM snapshot, and executor come from [ipenywis/laya-ultrafast](https://github.com/ipenywis/laya-ultrafast) and [Browser Use's jev-ultrafast](https://github.com/browser-use/jev-ultrafast) (MIT).
+Reverie is the agent operation mode of laya-ultrafast as its own project. The browser agent, DOM snapshot, and executor come from [ipenywis/laya-ultrafast](https://github.com/ipenywis/laya-ultrafast) and [Browser Use's jev-ultrafast](https://github.com/browser-use/jev-ultrafast) (MIT).
 
 <p align="center"><img src="docs/images/cli.png" alt="Starting a spec run and reading its progress from the terminal" width="90%"></p>
 
