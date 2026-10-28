@@ -1,0 +1,21 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "reverie-qa",
+  "version": "0.1.0",
+  "description": "Coordinate Reverie browser smoke tests, evidence, requests, and retained results.",
+  "license": "MIT",
+  "keywords": ["qa", "browser-testing", "smoke-tests"],
+  "extensions": {
+    "com.openai": {
+      "requires_local_executor": true,
+      "interface": {
+        "displayName": "Reverie QA",
+        "shortDescription": "Coordinate local browser smoke tests",
+        "longDescription": "Create logical testing sessions, control authenticated Reverie browser workers, follow ordered evidence, and triage retained results.",
+        "developerName": "Reverie",
+        "category": "Developer Tools",
+        "capabilities": ["Read", "Write"]
+      }
+    }
+  }
+}

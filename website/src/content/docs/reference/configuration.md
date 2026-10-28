@@ -55,6 +55,8 @@ OPENROUTER_API_KEY=
 
 # Layer 1, the decision engine: jev (hosted on OpenRouter, the default) or laya (local laya.cpp or MLX, no key).
 # REVERIE_DECISION_ENGINE=jev
+# REVERIE_LIQUID_MODEL=liquid/d1-ultra  # experimental: --engine liquid
+# REVERIE_DECISION_IMAGES=on           # default on for Liquid, off for Jev
 # REVERIE_DECISION_MIN_CONFIDENCE=0.6   # below this, a decision escalates to layer 2
 
 # Layer 2, the escalation model: the text model (Mercury) overrules the decision engine when it is unsure.
@@ -102,6 +104,8 @@ Reverie's own settings use the `REVERIE_` prefix. The older `LAYA_AGENT_` names 
 | New name | Old name |
 | --- | --- |
 | `REVERIE_DECISION_ENGINE` | `LAYA_AGENT_ENGINE` |
+| `REVERIE_LIQUID_MODEL` | `LIQUID_DECISION_MODEL` |
+| `REVERIE_DECISION_IMAGES` | `REMOTE_DECISION_IMAGES` |
 | `REVERIE_DECISION_MIN_CONFIDENCE` | `LAYA_AGENT_LAYA_MIN` |
 | `REVERIE_ESCALATION` | `LAYA_AGENT_MERCURY` |
 | `REVERIE_SESSION`, `REVERIE_BROWSER`, `REVERIE_VIEWPORT`, `REVERIE_DIALOGS`, `REVERIE_UI_PORT`, `REVERIE_UI_REVIEW` | `LAYA_AGENT_` plus the same suffix |
@@ -119,11 +123,11 @@ Reverie keeps run history, stored specs, caches and the pilot playbook in a `.re
 
 ## Pilot and text model
 
-The text model and the pilot each call an OpenAI-compatible chat API. The pilot reads its own `REVERIE_PILOT_*` settings and falls back to the `TEXT_MODEL_*` value for any it does not set. See [Models and providers](/reverie/reference/models/) for the presets and the fallback rules.
+The text model and the pilot use an OpenAI-compatible chat API or the restricted local Codex app-server. The pilot reads its own `REVERIE_PILOT_*` settings and falls back to the `TEXT_MODEL_*` value for any it does not set. See [Models and providers](/reverie/reference/models/) for the presets and the fallback rules.
 
 | Variable | Default | What it does |
 | --- | --- | --- |
-| `TEXT_MODEL_PROVIDER` | unset | Provider preset for the text model: `openrouter`, `opencode-go` or `deepseek`. It sets the base URL and, for two of them, finds the key. |
+| `TEXT_MODEL_PROVIDER` | unset | Provider preset for the text model: `openrouter`, `opencode-go`, `deepseek`, or `codex`. HTTP providers set the base URL and, for two of them, finds the key. |
 | `TEXT_MODEL_BASE_URL` | the preset's URL, else `https://api.deepseek.com/v1` | Base URL of an OpenAI-compatible chat API. It wins over the preset. |
 | `TEXT_MODEL_API_KEY` | none | API key for that base URL. Not needed for a local endpoint (`localhost`, `127.0.0.1`, `::1`). |
 | `TEXT_MODEL` | `deepseek-chat` | Model id for the text model. It fills in field values, plans goals, and is the escalation model (Mercury by default). |
@@ -140,12 +144,19 @@ The text model and the pilot each call an OpenAI-compatible chat API. The pilot 
 | `REVERIE_PILOT_VISION` | `1` | Set to `0` to stop sending marked screenshots to the pilot. |
 | `REVERIE_UI_REVIEW` | `1` | Set to `0` to turn off the screenshot review of each step for broken UI. |
 | `REMOTE_DECISION_MODEL` | `typesafe/jev-1.13` | Model id for the hosted Jev decision engine. |
+| `REVERIE_LIQUID_MODEL` | `liquid/d1-ultra` | Experimental Liquid decision model on OpenRouter. Jev stays the default engine. |
+| `REVERIE_DECISION_IMAGES` | on for Liquid; off for Jev | Send fresh screenshots with structured decision state. A missing or stale image stops the decision. |
+
+| `REVERIE_CODEX_COMMAND` | `codex` | Installed Codex executable used by the local provider. |
+| `REVERIE_CODEX_TIMEOUT` | `120` | Positive per-call deadline in seconds for Codex. |
+
+See [Codex pilot](/reverie/guides/codex-pilot/) before selecting the local provider. It requires an existing local sign-in and never copies authentication files.
 
 ## Decision engine and escalation model
 
 | Variable | Default | What it does |
 | --- | --- | --- |
-| `REVERIE_DECISION_ENGINE` | `jev` | The session's decision engine: `jev` (hosted, needs `OPENROUTER_API_KEY`) or `laya` (local). `reverie start --engine` wins over it. Any other value is an error. See [Decision engines](/reverie/reference/models/#decision-engines). |
+| `REVERIE_DECISION_ENGINE` | `jev` | The session's decision engine: `jev` (hosted, needs `OPENROUTER_API_KEY`), `laya` (local), or experimental `liquid` (hosted, the same key). `reverie start --engine` wins over it. Any other value is an error. See [Decision engines](/reverie/reference/models/#decision-engines). |
 | `REVERIE_DECISION_MIN_CONFIDENCE` | `0.6` | Minimum confidence for the decision engine's choice before the step escalates to the escalation model. |
 | `REVERIE_ESCALATION` | `on` | `off`, `0`, `false` or `no` turns the escalation model off. A step the decision engine is unsure about then goes back to the pilot unexecuted. |
 | `LAYA_BACKEND` | `auto` | Local Laya only. `auto`, `http` or `mlx`. `auto` picks `mlx` on Apple Silicon when `laya_mlx` is installed, else `http`. |
@@ -160,6 +171,7 @@ The text model and the pilot each call an OpenAI-compatible chat API. The pilot 
 | --- | --- | --- |
 | `REVERIE_SESSION` | `default` | Session name, used when you do not pass `--session`. |
 | `REVERIE_BROWSER` | auto-detect | Browser executable. Without it Reverie tries `chromium`, `google-chrome-stable`, `google-chrome`, `brave` and `chromium-browser`. |
+| `REVERIE_DISPLAY` | auto-discover | Explicit X11 display for a headed launch. Otherwise Reverie discovers an owned native Wayland socket or authenticated X11 display. Headless launches do not need a display. |
 | `REVERIE_VIEWPORT` | `1920x1080` | Viewport size as `WIDTHxHEIGHT`. |
 | `REVERIE_DIALOGS` | `accept` | How native alert, confirm and prompt dialogs are answered. `dismiss` cancels them; anything else accepts. |
 | `REVERIE_STEP_CEILING` | `25` | Upper bound on steps in one automatic loop. |
@@ -168,6 +180,15 @@ The text model and the pilot each call an OpenAI-compatible chat API. The pilot 
 | `REVERIE_PLAYBOOK` | `.reverie/playbook.json` | Path of the per-host lessons file. |
 | `REVERIE_ENV_FILE` | unset | An extra `.env` file to read first. See [How `.env` is loaded](#how-env-is-loaded). |
 | `BU_NAME` | set by Reverie | Daemon name (`laya-agent-<session>`, a name kept from the older alias). The CLI sets it when it spawns a session daemon, and the daemon refuses to start without it. Do not set it yourself. |
+
+## Screenshot privacy
+
+| Variable | Default | What it does |
+| --- | --- | --- |
+| `REVERIE_MASK_SECRETS` | `1` (on) | Set before session startup. `0`, `false`, `off` or `no` disables image masking for frames, clips and UI review. **Turning it off writes any visible secrets into frames and clips.** Text/trail redaction and native password bullets are unchanged. Unset or unrecognized values keep masking on. An existing daemon retains its environment. |
+| `REVERIE_SECRET_SELECTORS` | `[]` | Trusted JSON array of CSS selectors for form or text fields, used only while masking is on. Invalid entries or non-field matches are ignored with sanitized warnings. Configure it in the operator environment, never through a spec or model request. |
+
+Masking is best effort, not a guarantee. Unsupported fields can remain visible; do not use real secrets without your own review. Masks are field-local, and masking faults warn while keeping fresh captures where possible. Existing saved captures are not rewritten. See [screenshot privacy](https://github.com/r3c0nc1l3r/reverie/blob/main/docs/screenshot-privacy.md) for scope and compositor limits.
 
 ## Downloads
 

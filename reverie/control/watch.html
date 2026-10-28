@@ -99,7 +99,7 @@
       $("url").textContent = s.url || ""; $("url").title = s.title || "";
       $("steps").textContent = `${s.steps} steps`;
       if (s.caption) { $("caption").textContent = s.caption; $("caption").className = ""; }
-      if (s.frame && s.frame !== lastFrame) { $("frame").src = `data:image/jpeg;base64,${s.frame}`; lastFrame = s.frame; }
+      if (s.frame && s.frame !== lastFrame) { $("frame").src = `data:image/${s.frame.startsWith("iVBORw0KGgo") ? "png" : "jpeg"};base64,${s.frame}`; lastFrame = s.frame; }
       $("history").innerHTML = s.history.map((h) =>
         `<li><span class="layer ${esc(h.by)}">${esc(h.by === "decision" && h.decision_engine ? `decision · ${h.decision_engine}` : h.by)}</span><small>${esc(h.kind)}</small> ${esc(h.label)} ` +
         `${h.text ? `<small>“${esc(h.text)}”</small>` : ""}${h.escalation ? ` <small>(escalated: ${esc(h.escalation)})</small>` : ""}</li>`).join("");

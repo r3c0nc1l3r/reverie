@@ -11,6 +11,7 @@ The pilot never gets a selector, a shell, or a secret. Each answer is one operat
 """
 
 import json
+import math
 import os
 import re
 import time
@@ -21,19 +22,41 @@ from ..settings import setting
 
 DEFAULT_MODEL = "z-ai/glm-5.3-flash"
 
-PILOT = """You are the pilot of a QA browser test. You run the test plan one operation at a time. Fast layers below
-you (a decision engine, then an escalation model) click and type; you give them short, concrete intents and verify the outcome.
+PILOT = """Visual-first interaction policy: Image 1 shows the screen with privacy masks; image 2 adds
+element tags for mapping only. Opaque diagonal stripes indicate a privacy mask, not an application defect.
+Use visible field boundaries and labels to assess field structure, but a mask does not prove the underlying value
+or reveal controls it covers. Do not pass a visual check solely because a masked area exists. Treat DOM labels as supporting evidence, never proof that an icon or control
+is actually visible or usable. Prefer one direct act from the screenshot. Delegated do prepares a guarded proposal without executing it; inspect the next screen and choose act.
+An offscreen act reveals the target first and returns without clicking; choose again after seeing it. For tiny, missing or ambiguous icons use inspect for a target crop and resource
+readiness; use bounded wait for a loading state and reobserve. Never infer a missing icon from its aria label
+and call the flow visually passed. Record visual failures before a workaround; distinguish low cosmetic
+issues from serious user-flow defects. If the screenshot is unavailable, stop for evidence.
 
+You are the pilot of a QA browser test. You run the test plan one operation at a time. Fast layers below
+you (a decision engine, then an escalation model) may propose a target. Primarily choose direct act operations from the rendered screen;
+in visual-primary mode do prepares a proposal for your next visual decision and does not execute it.
+
+Additional operations: {"op":"inspect", "ref":"optional target id"} for a native-size target crop and
+loading diagnostics; {"op":"wait", "seconds":0.5} to wait up to three seconds then capture again.
 Answer with JSON only, one operation:
-{"op": "do", "intent": "<one concrete UI goal, e.g. Open Dispatch then Work Order>", "hints": ["<optional
+{"op": "do", "intent": "<one concrete UI goal, e.g. Open Settings then Profile>", "hints": ["<optional
    steering: field names, which button>"], "until_text": "<optional text that means done>",
    "until_url": "<optional url fragment that means done>", "avoid": ["<labels the stack must never click here,
    e.g. Forgot password?, a site logo>"], "allow_values": ["<exact values the stack may type for this intent>"],
    "max_steps": <1-10, how many clicks/keystrokes this intent should need>,
    "read_only": <true when the intent only navigates or inspects; then nothing can be typed or selected>}
-{"op": "act", "ref": "<element id you can see in the screenshot>", "text": "<value to type, fill fields only; '' clears the field>"}
-   (you act directly; use it when the stack failed twice on a target, or the target is visual: icons,
+{"op": "act", "ref": "<element id you can see in the screenshot>", "text": "<value to type, fill fields only; '' clears the field>", "option": "<exact dropdown option, optional>"}
+   (For an action of kind expand, act on its id to see its children. Use bucket_back or bucket_root to navigate back.
+   For a grouped dropdown, use option with its exact label or value.
+   Prefer acting directly from the screenshot, including icons,
    suggestion rows, custom widgets. The screenshot marks each element with its id in a yellow tag.)
+{"op": "visual_act", "x": <image x>, "y": <image y>, "text": "<optional stated value>"}
+   (Use when a visible target has no usable element id. Give pixel coordinates in the annotated image (image 2 in visual-primary mode),
+   using image_size in the context; the top left is 0,0. Only type stated values into safe fields.)
+{"op": "hover", "ref": "<observed element id>"}
+{"op": "visual_hover", "x": <image x>, "y": <image y>}
+   (Hover opens menus without clicking. Use visual_hover for a visible menu parent without an element id;
+   its coordinates use the same image as visual_act. Try hovering a menu parent before reporting no response.)
 {"op": "check", "text": "<text that must be on the page>", "absent": "<text that must not be>", "url": "<url part>",
    "link": "<visible link text>", "href": "<part the link's target must contain, e.g. token=>"}
    (a link check reads link targets without showing them; use it instead of opening source views)
@@ -61,14 +84,14 @@ clipped elements, error text, raw code, wrong data. Look at every screenshot lik
 Optionally add "say": a pleasant, spoken progress update for the tester who is listening. Use it only at
 milestones: starting a step, finishing a step (the bottom line and whether it passed), or a notable finding.
 Speak like a colleague giving a status update, first person, one or two short sentences, e.g. "I found the
-invoice email for work order 12 and its approve link carries a token. Step three passes." Never read out checks,
+confirmation message and verified its link. Step three passes." Never read out checks,
 element names, URLs, or field values; never mention the orchestrator or pausing. Most operations have no "say".
 
 Rules:
 - Failures are results, not obstacles. When the app does not do what the step or a user expects (an item is
   missing from a list, a control is absent or does nothing, a wrong value, an error), record a finding FIRST.
-  If you then work around it to continue (for example open a work order by URL because it is missing from the
-  dispatch board), put the workaround in the finding. A step with a medium or high finding must be marked fail, with
+  If you then work around it to continue (for example open an item by URL because it is missing from the
+  list), put the workaround in the finding. A step with a medium or high finding must be marked fail, with
   the finding in the note. After you mark a step fail, continue with the next step; the run does not stop.
 - Read "stack ran" in each outcome: it lists every action the stack executed. Check it did only what you
   asked. If it did more (for example clicked Yes or Save), record that and verify the resulting state.
@@ -77,12 +100,12 @@ Rules:
 - Never repeat an intent that already failed on this step. After one failure, change the approach (different
   control, hint, route) or judge it: record a finding and mark fail, or ask. The context warns you when you
   are repeating yourself or making no progress.
-- Before a step, make sure you are on the page it starts from (for example client HOME or NEW ORDER). If the
+- Before a step, make sure you are on the page it starts from (for example the home page or the form). If the
   tab shows some other record or form, navigate first; never reuse a form that belongs to another record.
 - A step that creates something is proven only by something NEW: an ID or row that did not exist before this
   run and is not named in the notes as an existing fixture. An existing ID is not proof of creation.
 - Work on current_step only. When its outcome is proven, mark it; the next step starts automatically.
-- Put any value to type in single quotes inside the intent, e.g. Enter '300' in Client billing (client_rate2).
+- Put any value to type in single quotes inside the intent, e.g. Enter '300' in Amount.
   Use field names and hints from the elements list; they are stable.
 - One intent per UI goal. If the stack paused without reaching it, rephrase with more specific hints, or split it.
   After two failed tries on the same goal, use admin or ask.
@@ -101,7 +124,7 @@ Rules:
   a login page in an isolated tab does not mean the session expired.
 - Prefer the page you are on. Use tab_new with isolated true when a step says signed out or private window."""
 
-OPS = {"finding", "dialogs", "back", "act", "do", "check", "tab_new", "tab", "goto", "mark", "admin", "ask", "lesson"}
+OPS = {"inspect", "wait", "finding", "dialogs", "back", "act", "visual_act", "hover", "visual_hover", "do", "check", "tab_new", "tab", "goto", "mark", "admin", "ask", "lesson"}
 
 
 def playbook_path():
@@ -137,22 +160,23 @@ def lessons_for(hosts):
 
 
 def pilot_model():
-    return setting("REVERIE_PILOT_MODEL", DEFAULT_MODEL)
+    provider = model.endpoint("pilot")[2]
+    return setting("REVERIE_PILOT_MODEL", "gpt-6.1-terra" if provider == "codex" else DEFAULT_MODEL)
 
 
-def context_for(session, step, log):
+def context_for(session, step, log, image_size=None):
     page = session.page or {}
     test = session.test or {}
-    actions = page.get("actions", [])
-    # A text field's 'Open …' click twin only focuses it; leave it out so long forms fit (the fill element stays).
-    fills = {(a.get("label"), a.get("hint")) for a in actions if a["kind"] == "fill"}
-    actions = [a for a in actions if not (a["kind"] == "click" and a.get("role") == "textbox"
-                                          and ((a.get("label") or "").removeprefix("Open "), a.get("hint")) in fills)]
-    elements = [{k: a[k] for k in ("id", "kind", "label", "value", "hint", "checked", "offscreen")
-                 if a.get(k) not in (None, "")} for a in actions[:220]]
+    actions = session.model_actions(220) if hasattr(session, "model_actions") else page.get("actions", [])
+    elements = [{k: a[k] for k in ("id", "kind", "label", "value", "hint", "checked", "offscreen", "count", "current_value")
+                 if a.get(k) not in (None, "")} for a in actions]
     from .session import scrub
 
     return scrub({
+        "observation": getattr(session, "observation", {}),
+        "inspection": step.get("inspection"),
+        "interaction_policy": "visual-primary; visually approve proposals; one action per observation",
+        "proposed_action": session.public_pending(),
         "test": test.get("title"),
         "plan": [{"n": s["n"], "title": s["title"], "status": s["status"], "note": s["note"]}
                  for s in test.get("steps", [])],
@@ -170,6 +194,8 @@ def context_for(session, step, log):
                   "signed_out_isolated": t.get("isolated", False)} for i, t in enumerate(tab_list(session))],
         "url": page.get("url"),
         "title": page.get("title"),
+        "image_size": image_size,
+        "viewport_size": {"width": page.get("w"), "height": page.get("h")},
         "visible_text": page.get("text", "")[:5000],
         "elements": elements,
     })
@@ -209,9 +235,8 @@ def allowed_hosts(session):
     return {h for h in hosts if h}
 
 
-def validate(output, session):
-    if isinstance(output, dict) and output.get("op") == "wait":
-        # Models often answer a loading page with a bare wait; it means the observed "wait" action.
+def validate(output, session, image_size=None):
+    if isinstance(output, dict) and output.get("op") == "wait" and "seconds" not in output:
         output = {**output, "op": "act", "ref": "wait"}
     if not isinstance(output, dict) or output.get("op") not in OPS:
         raise ValueError(f"Pilot returned no valid operation: {str(output)[:200]}")
@@ -228,12 +253,18 @@ def validate(output, session):
             max_steps = min(10, max(1, int(output.get("max_steps") or 6)))
         except (TypeError, ValueError):
             max_steps = 6
+        if getattr(session, "visual_mode", None) == "primary":
+            max_steps = 1
         clean.update(intent=intent.strip()[:400],
                      hints=[str(h)[:200] for h in (output.get("hints") or []) if h][:4],
                      until_text=output.get("until_text") or None, until_url=output.get("until_url") or None,
                      avoid=[str(a)[:120] for a in (output.get("avoid") or []) if a][:8],
                      allow_values=[str(v)[:200] for v in (output.get("allow_values") or []) if v][:8],
                      max_steps=max_steps, read_only=bool(output.get("read_only")))
+    elif op == "inspect":
+        clean["ref"] = str(output.get("ref") or "").lstrip("@") or None
+    elif op == "wait":
+        clean["seconds"] = min(3.0, max(0.05, float(output.get("seconds", 0.5))))
     elif op == "finding":
         if output.get("severity") not in {"high", "medium", "low"} or not str(output.get("what") or "").strip():
             raise ValueError("A finding needs a severity (high|medium|low) and what")
@@ -244,6 +275,29 @@ def validate(output, session):
         if not host or not lesson:
             raise ValueError("A lesson needs a host and text")
         clean.update(host=host[:120], lesson=lesson[:400])
+    elif op in {"visual_act", "visual_hover"}:
+        x, y, text = output.get("x"), output.get("y"), output.get("text")
+        page = session.page or {}
+        width, height = page.get("w"), page.get("h")
+        image_width, image_height = image_size or (width, height)
+        if (not all(isinstance(v, (int, float)) and not isinstance(v, bool) and math.isfinite(v)
+                    for v in (x, y, width, height, image_width, image_height))
+                or width <= 0 or height <= 0 or image_width <= 0 or image_height <= 0
+                or not 0 <= x < image_width or not 0 <= y < image_height):
+            raise ValueError("Visual action coordinates must be finite and inside the screenshot")
+        if op == "visual_hover" and text is not None:
+            raise ValueError("Hover does not take text")
+        if text is not None and not isinstance(text, str):
+            raise ValueError("Visual action text must be a string")
+        clean.update(x=x * width / image_width, y=y * height / image_height)
+        if op == "visual_act":
+            clean["text"] = text
+    elif op == "hover":
+        ref = str(output.get("ref") or "").lstrip("@")
+        action = next((a for a in (session.page or {}).get("actions", []) if a["id"] == ref), None)
+        if not action or action.get("kind") != "click":
+            raise ValueError("Hover requires an observed clickable element")
+        clean["ref"] = ref
     elif op == "act":
         ref = str(output.get("ref") or "").lstrip("@")
         action = next((a for a in (session.page or {}).get("actions", []) if a["id"] == ref), None)
@@ -257,15 +311,18 @@ def validate(output, session):
                          and a.get("label") == base and a.get("hint") == action.get("hint")), None)
             if twin:
                 ref, action = twin["id"], twin
-        if action["kind"] == "select" and isinstance(text, str) and text.strip():
-            # Text on a select option means "choose this option": use the sibling option whose name matches.
-            field = (action.get("label") or "").split(" → ")[0]
-            option = next((a for a in (session.page or {}).get("actions", []) if a["kind"] == "select"
-                           and a.get("node", object()) == action.get("node", object())
-                           and (a.get("label") or "").split(" → ")[0] == field
-                           and (a.get("label") or "").split(" → ")[-1].strip().lower() == text.strip().lower()), None)
-            if option:
-                ref, action, text = option["id"], option, None
+        option = output.get("option")
+        if option is None and (action["kind"] == "select" or
+                               (action["kind"] == "expand" and action.get("role") == "combobox")):
+            option = text if isinstance(text, str) and text.strip() else None
+        if option is not None:
+            try:
+                action = session.resolve(ref=ref, option=option)
+            except ValueError as error:
+                raise ValueError(f"{ref} does not take text unless it matches exactly one option: {error}") from error
+            if any(a["id"] == action["id"] for a in (session.page or {}).get("actions", [])):
+                ref = action["id"]
+            text = None
         if action["kind"] == "fill" and text == "":
             pass  # An explicit clear of a field.
         elif action["kind"] == "fill":
@@ -280,6 +337,8 @@ def validate(output, session):
                                  "fill element to type")
             text = None
         clean.update(ref=ref, text=text, label=action.get("label"))
+        if option is not None:
+            clean["option"] = option
     elif op == "check":
         fields = {k: output.get(k) for k in ("text", "absent", "url", "link", "href") if output.get(k)}
         if not fields:
@@ -319,7 +378,9 @@ def validate(output, session):
 
 
 UI_REVIEW = """You review screenshots from one step of a QA browser test for broken or degraded UI. The images are in
-time order; the last one is the step's final screen. Report only problems a user would notice:
+time order; the last one is the step's final screen. Opaque diagonal stripes indicate a privacy mask, not an app
+defect. Assess visible field boundaries and labels, but do not infer the masked value or hidden controls, or treat
+the mask as proof that a visual check passed. Report only problems a user would notice:
 overlapping or clipped elements, cut-off or overflowing text, broken images or icons, missing styles (raw
 unstyled HTML), error banners or stack traces, raw template code (e.g. #variable# or {{x}}), empty regions where
 content should be, misaligned or unreadable controls, dialogs covering content, obviously wrong data (NaN,
@@ -328,13 +389,15 @@ Earlier images show intermediate states (before a save, before a list reloads). 
 from the LAST image; report an earlier image only for rendering problems visible in it.
 
 Answer with JSON only: {"issues": [{"severity": "high|medium|low", "image": <1-based index>,
-"what": "<one sentence: what is broken and where>"}], "summary": "<one short sentence>"}
+"what": "<one sentence: what is broken and where>", "affects_step": <true if this defect affects this step's feature or ability to complete the flow, false for a separate feature>}], "summary": "<one short sentence>"}
 Use high for anything that blocks or misleads a user, medium for clearly broken but usable, low for cosmetic."""
 
 
 def ui_review(session, step, files):
     """Multimodal review of a step's frames. Returns {"issues": [...], "summary": "..."} or None."""
-    if setting("REVERIE_UI_REVIEW", "1") == "0" or not files:
+    from ..settings import is_off
+
+    if is_off("REVERIE_UI_REVIEW", "1"):
         return None
     import base64
     import io
@@ -342,23 +405,33 @@ def ui_review(session, step, files):
     from PIL import Image
 
     images = []
-    for name in files[-5:]:
+    image_files = []
+    frames = session.review_frames(files)
+    for name, data in frames:
         try:
-            image = Image.open(session.trail_dir / "frames" / name).convert("RGB")
-        except OSError:
+            with Image.open(io.BytesIO(data)) as source:
+                image = source.convert("RGB")
+        except (OSError, ValueError):
+            if name == frames[-1][0]:
+                return None
             continue
         if image.width > 1280:
             image = image.resize((1280, round(image.height * 1280 / image.width)))
         out = io.BytesIO()
         image.save(out, format="JPEG", quality=70)
         images.append(base64.b64encode(out.getvalue()).decode())
+        image_files.append(name)
     if not images:
         return None
     context = {"test": (session.test or {}).get("title"), "step": step["title"], "images": len(images)}
     try:
         output, _ = model.chat_json(UI_REVIEW, context, model=pilot_model(), max_tokens=4096, role="pilot",
                                     reasoning_effort=os.environ.get("TEXT_MODEL_EFFORT", "low"), images=images)
-    except (ValueError, RuntimeError, KeyError, TypeError, json.JSONDecodeError):
+    except (ValueError, RuntimeError, KeyError, TypeError, json.JSONDecodeError) as error:
+        from ..codex_provider import CodexError
+
+        if isinstance(error, CodexError):
+            raise
         return None
     issues = []
     for issue in output.get("issues") or []:
@@ -366,8 +439,8 @@ def ui_review(session, step, files):
             continue
         index = issue.get("image") if isinstance(issue.get("image"), int) else len(images)
         index = min(max(index, 1), len(images))
-        issues.append({"severity": issue["severity"], "what": str(issue.get("what") or "")[:300],
-                       "frame": files[-len(images):][index - 1]})
+        issues.append({"severity": issue["severity"], "affects_step": issue.get("affects_step") is not False, "what": str(issue.get("what") or "")[:300],
+                       "frame": image_files[index - 1]})
     return {"issues": issues, "summary": str(output.get("summary") or "")[:300]}
 
 
@@ -396,7 +469,7 @@ def marked_screenshot(session, width=1280):
         tag = action["id"]
         draw.rectangle([x, max(0, y - 14), x + 8 * len(tag) + 6, max(14, y)], fill=(245, 176, 65))
         draw.text((x + 3, max(0, y - 14)), tag, fill=(0, 0, 0))
-    if image.width > width:
+    if width and image.width > width:
         image = image.resize((width, round(image.height * width / image.width)))
     out = io.BytesIO()
     image.save(out, format="JPEG", quality=70)
@@ -405,15 +478,54 @@ def marked_screenshot(session, width=1280):
 
 def choose(session, step, log):
     last = None
-    shot = marked_screenshot(session)
+    primary = getattr(session, "visual_mode", None) == "primary"
+    if primary and not getattr(session, "observation", {}).get("visual_available"):
+        raise ValueError("Fresh visual evidence unavailable; restore screenshot capture before continuing")
+    shot = marked_screenshot(session, width=None) if primary else marked_screenshot(session)
+    if primary and not shot:
+        raise ValueError("Visual pilot needs screenshots; vision cannot be disabled in primary mode")
+    images = [session.frame, shot] if primary else [shot] if shot else []
+    inspection = step.get("inspection") or {}
+    if primary and inspection.get("crop_file"):
+        import base64
+
+        try:
+            images.append(base64.b64encode((session.trail_dir / "frames" / inspection["crop_file"]).read_bytes()).decode())
+        except OSError:
+            pass
+    image_size = None
+    if shot:
+        import base64
+        import io
+
+        from PIL import Image
+
+        with Image.open(io.BytesIO(base64.b64decode(shot))) as image:
+            image_size = image.size
+    context = context_for(session, step, log, {"width": image_size[0], "height": image_size[1]}
+                          if image_size else None)
+    # Crops travel as images, not repeated base64 text in the prompt.
+    if context.get("inspection"):
+        context["inspection"] = {k: v for k, v in context["inspection"].items() if k not in {"crop", "raw_frame"}}
     for _ in range(3):
         try:
-            output, meta = model.chat_json(PILOT, context_for(session, step, log), model=pilot_model(), max_tokens=4096, role="pilot",
-                                           images=[shot] if shot else (),
+            output, meta = model.chat_json(PILOT, context, model=pilot_model(), max_tokens=4096, role="pilot",
+                                           images=images,
                                           reasoning_effort=os.environ.get("TEXT_MODEL_EFFORT", "low"))
-            return validate(output, session), meta
+            try:
+                if isinstance(output, dict) and output.get("op") in {"visual_act", "visual_hover"} and not shot:
+                    raise ValueError("Visual action requires a screenshot")
+                return validate(output, session, image_size), meta
+            except (ValueError, KeyError, TypeError) as error:
+                if model.endpoint("pilot")[2] == "codex":
+                    from ..codex_provider import CodexError
+
+                    raise CodexError("Codex returned an invalid pilot operation; nothing executed.") from None
+                raise error
         except (ValueError, KeyError, TypeError, RuntimeError, json.JSONDecodeError) as error:
-            if "TEXT_MODEL_API_KEY" in str(error):
+            from ..codex_provider import CodexError
+
+            if isinstance(error, CodexError) or "TEXT_MODEL_API_KEY" in str(error):
                 raise
             last = error
     raise ValueError(f"The pilot gave no valid operation after 3 tries ({last})")

@@ -7,6 +7,45 @@ project uses [Semantic Versioning](https://semver.org/). From 0.1.0 on,
 from the Conventional Commit titles of merged pull requests. Do not edit released
 entries by hand.
 
+## 0.2.0 (2026-10-27)
+
+### Features
+
+* Add experimental `--engine liquid` decisions through OpenRouter, using `liquid/d1-ultra` by default. Jev 1.13 remains the default engine.
+* Add fresh screenshot and observed-target geometry input for Liquid, with optional image input for Jev.
+* Group browser workers, workflows, roles, and attempts into durable testing sessions.
+* Stream authenticated dashboard updates with reconnect snapshots and bounded live frames.
+* Add follow-along narration with a 350 ms playback boundary, one-operation supervision, requests, and human takeover.
+* Add explicit pinning, triage, and temporary evidence cleanup with durable result metadata.
+* Add a restricted Codex app-server pilot using an existing local sign-in.
+* Add guarded pilot hover and screenshot-coordinate hover, plus CLI `visual-hover`.
+* Keep all controls reachable through action buckets, and add guarded screenshot-coordinate actions for unlisted controls.
+* Expose coordination through CLI state/events, MCP tools, and portable agent plugins.
+* Add best-effort, field-local screenshot masks and trusted form/text-field selectors through `REVERIE_SECRET_SELECTORS`; unsupported fields may remain visible.
+* Add startup setting `REVERIE_MASK_SECRETS=0` to disable capture masking. Turning it off writes any visible secrets into frames and clips; masking stays on by default and text/trail redaction is unchanged.
+
+### Fixes and verification
+
+* Review verified capture-produced frames, preserve immutable evidence with atomic writes, and reject stale final review results.
+* Preserve fresh capture availability during animation while retaining action and coordinate checks.
+
+* Keep fresh captures on masking faults with sanitized warnings; remove whole-frame fallback, numeric-substring matching and stale-target fan-out. Detect PNG fallback MIME in model inputs, MCP and viewers.
+* Preserve empty-field placeholders and safe borders, identify privacy masks with opaque stripes, and acquire PNG pixels before masking to avoid JPEG bleed.
+* Reuse valid unchanged screenshots for each step while refreshing pixels at review boundaries and rejecting stale evidence.
+* Protect hover hits and associated label controls, including disabled, hidden, and inert ancestors.
+* Reject missing or stale visual observations before a hosted visual decision.
+* Preserve decision-layer history and stated-value guards across the experimental engine.
+* Add focused adapter, screenshot freshness, and accepted-action history regression coverage.
+* Bind command retries to the worker and effective control identity, including omitted epochs.
+* Capture event watermarks atomically with snapshots to avoid skipping updates during resynchronization.
+* Discover owned native Wayland or authenticated X11 displays for headed launches, without a silent headless fallback.
+* Preserve complete visual signatures across bounded IPC messages and consistent screenshot coordinates.
+
+### Documentation
+
+* A demo video will follow.
+* Document Liquid settings, screenshot data sharing, evaluation limits, and its smaller context budget.
+
 ## 0.1.0 (2026-09-28)
 
 First release of reverie as its own repository. It contains only the agent

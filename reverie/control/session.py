@@ -5,9 +5,12 @@ last observation actually contains. Nothing here accepts selectors or executable
 """
 
 import base64
+import hashlib
 import json
+import logging
 import os
 import re
+import stat
 import threading
 import time
 import uuid
@@ -15,10 +18,12 @@ from pathlib import Path
 
 from browser_harness.helpers import cdp
 
-from ..browser import Browser, StalePage
+from ..browser import MARKER, Browser, StalePage
+from ..codex_provider import CodexError
 from ..model import MissingKey
 from ..settings import setting
 from . import downloads
+from .coordination_session import ControlError, CoordinatedSession, browser_operation, browser_read
 from .narrator import Narrator
 from .project import runs_dir, spec_id, write_run_summary
 
@@ -85,6 +90,10 @@ and entered the TOTP code. Everything looks good here; I didn't notice any error
 they accomplished; never list individual clicks or element ids, and never repeat typed secrets. Mention an
 error only if error_words_on_page is non-empty or a check failed. Reflect the outcome if given
 (pass/fail/blocked). Answer with JSON only: {"summary": "..."}"""
+
+
+class FrameExists(OSError):
+    """An exclusive frame name is already occupied."""
 
 
 class SessionError(ValueError):
@@ -178,7 +187,7 @@ class HeadedBrowser(Browser):
 
 
 def element(action):
-    fields = ("id", "kind", "role", "label", "value", "hint", "checked", "selected", "expanded")
+    fields = ("id", "kind", "role", "label", "value", "hint", "checked", "selected", "expanded", "count", "bucket", "current_value")
     return {k: action[k] for k in fields if action.get(k) not in (None, "")}
 
 
@@ -191,9 +200,10 @@ def escalation_disabled():
     return setting("REVERIE_ESCALATION", "on").lower() in {"off", "0", "false", "no"}
 
 
-class Session:
+class Session(CoordinatedSession):
     def __init__(self, url, *, name="default", voice="auto", trail_dir=None, goal=None, engine=None,
-                 download_dir=None, stream_interval=0.0):
+                 download_dir=None, stream_interval=0.0, testing_session_id=None, project_root=None,
+                 follow_along=False, padding_ms=350):
         self.name = name
         self.lock = threading.RLock()
         self.narrator = Narrator(voice)
@@ -202,9 +212,10 @@ class Session:
         self.goal = goal
         # The fast decision layer under the stack: hosted Jev on OpenRouter (default), or local Laya.
         self.engine = engine or setting("REVERIE_DECISION_ENGINE", "").strip().lower() or None
-        if self.engine not in {None, "laya", "jev"}:
-            raise ValueError("REVERIE_DECISION_ENGINE must be laya or jev")
-        if self.fast_engine() == "jev":
+        if self.engine not in {None, "laya", "jev", "liquid"}:
+            raise ValueError("REVERIE_DECISION_ENGINE must be laya, jev, or liquid")
+        pilot_provider = setting("REVERIE_PILOT_PROVIDER", os.environ.get("TEXT_MODEL_PROVIDER", ""))
+        if self.fast_engine() in {"jev", "liquid"} and (self.engine is not None or pilot_provider.strip().lower() != "codex"):
             from ..model import MissingKey, openrouter_key
 
             try:
@@ -232,7 +243,9 @@ class Session:
         self.trail_dir.mkdir(parents=True, exist_ok=True)
         self.download_dir = Path(download_dir) if download_dir else downloads.default_for(self.trail_dir)
         self.download_dir.mkdir(parents=True, exist_ok=True)
+        self.init_coordination(testing_session_id, project_root, follow_along, padding_ms)
         self.browser = HeadedBrowser(url, prepare=self.apply_download_dir)
+        self.browser.on_secret_registered = self._invalidate_secret_frames
         self.page = None
         self.observe(settle=True)
         self.status = "ready"
@@ -262,7 +275,13 @@ class Session:
 
     # ---- trail -------------------------------------------------------------------------------------
     def log(self, event, **fields):
-        record = scrub({"t": time.strftime("%Y-%m-%dT%H:%M:%S"), "event": event, **fields})
+        binding = {}
+        if getattr(self, "coordination", None):
+            binding = {"testing_session_id": self.testing_session_id, "worker_id": self.worker_id,
+                       "run_id": self.run_id, "incarnation": self.incarnation,
+                       "observation_id": (getattr(self, "observation", None) or {}).get("id"),
+                       "scope_revision": self.scope_revision}
+        record = scrub({"t": time.strftime("%Y-%m-%dT%H:%M:%S"), "event": event, **binding, **fields})
         self.last_activity = time.monotonic()  # Heartbeat for the pilot watchdog.
         feed = self.__dict__.setdefault("feed", [])
         record_ref = len(feed) + 1  # Event refs (#N) are separate from element refs (e7).
@@ -270,6 +289,7 @@ class Session:
             feed.append({**record, "seq": record_ref})
         with open(self.trail_dir / "trail.jsonl", "a") as trail:
             trail.write(json.dumps(record, default=str) + "\n")
+        self._shared_event(record)
 
     # ---- observation -------------------------------------------------------------------------------
     def settle(self, origin=None, timeout=15.0):
@@ -292,6 +312,7 @@ class Session:
                 return
             time.sleep(0.05)
 
+    @browser_read
     def observe(self, settle=False):
         if settle:
             self.settle()
@@ -304,31 +325,232 @@ class Session:
                 if time.monotonic() > deadline:
                     raise
                 time.sleep(0.2)
+        self._bucket_root = list(self.page.get("actions", []))
+        self._model_root = None
+        if getattr(self, "_model_limit", None):
+            self._prepare_model_root(self._model_limit)
+        self._apply_bucket_path()
         self.render()
+        try:
+            self._observation_review_state = self.browser.visual_state()
+        except Exception:
+            self._observation_review_state = None
         self.capture()
+        if self.last_capture_ok:
+            self._review_observation_invalid = False
         try:
             self.open_tabs = self.browser.tabs()
         except (RuntimeError, TimeoutError):
             pass
         self.keep_frame()
+        self._observation_ready(getattr(self, "last_capture_ok", False))
         return self.summary()
 
-    def save_frame(self, prefix):
-        """Store the current frame beside the trail so the dashboard can replay a run. Best effort."""
-        if not self.frame:
+    def _prepare_model_root(self, limit):
+        from ..actions import bounded
+
+        root = getattr(self, "_bucket_root", list((self.page or {}).get("actions", [])))
+        self._model_root = bounded(root, self.page.setdefault("action_buckets", {}), limit)
+
+    def model_actions(self, limit):
+        """Present every action within a model's limit without losing the current bucket."""
+        if not hasattr(self, "_bucket_root"):
+            self._bucket_root = list((self.page or {}).get("actions", []))
+        if getattr(self, "_model_root", None) is None:
+            self._model_limit = limit
+            self._prepare_model_root(limit)
+            self._apply_bucket_path()
+        if len(self.page.get("actions", [])) > limit:
+            path = tuple(getattr(self, "_bucket_path", []))
+            self.__dict__.setdefault("_bucket_view_limits", {})[path] = limit - 2 if path else limit
+            self._apply_bucket_path()
+        return self.page.get("actions", [])
+
+    def _apply_bucket_path(self):
+        """Reapply the longest still-valid navigation path to the latest observation."""
+        from ..actions import bounded
+
+        root = getattr(self, "_model_root", None)
+        if root is None:
+            root = getattr(self, "_bucket_root", (self.page or {}).get("actions", []))
+        buckets = (self.page or {}).get("action_buckets", {})
+        view_limits = getattr(self, "_bucket_view_limits", {})
+        path, current = [], root
+
+        def presentation(items, prefix):
+            limit = view_limits.get(tuple(prefix))
+            if limit is None:
+                return items
+            digest = hashlib.sha256(json.dumps(prefix).encode()).hexdigest()[:16]
+            return bounded(items, buckets, limit, namespace=f"view_bucket_{digest}")
+
+        for ref in getattr(self, "_bucket_path", []):
+            current = presentation(current, path)
+            entry = next((a for a in current if a.get("kind") == "expand" and a.get("id") == ref), None)
+            if not entry or entry.get("bucket") not in buckets:
+                break
+            path.append(ref)
+            current = buckets[entry["bucket"]]
+        self._bucket_path = path
+        current = presentation(current, path)
+        if path:
+            current = list(current) + [
+                {"id": "bucket_back", "kind": "expand", "bucket": "__back__", "label": "Back"},
+                {"id": "bucket_root", "kind": "expand", "bucket": "__root__", "label": "All actions"},
+            ]
+        self.page["actions"] = current
+
+    @browser_operation
+    def expand(self, ref):
+        """Navigate an observed action bucket without sending browser input."""
+        with self.lock:
+            return self._expand_bucket(ref)
+
+    def _expand_bucket(self, ref):
+        """Apply navigation while the caller holds the session lock."""
+        ref = (ref or "").lstrip("@")
+        action = next((a for a in (self.page or {}).get("actions", [])
+                         if a.get("id") == ref and a.get("kind") == "expand"), None)
+        if not action:
+            raise SessionError(f"Unknown action bucket {ref!r}; observe and choose again.")
+        if not hasattr(self, "_bucket_root"):
+            self._bucket_root = list(self.page["actions"])
+        path = list(getattr(self, "_bucket_path", []))
+        bucket = action.get("bucket")
+        if bucket == "__root__":
+            path = []
+        elif bucket == "__back__":
+            path = path[:-1]
+        elif bucket in self.page.get("action_buckets", {}):
+            path.append(ref)
+        else:
+            raise SessionError(f"Action bucket {ref!r} is no longer available.")
+        self._bucket_path = path
+        self._apply_bucket_path()
+        return {**self.summary(), "kind": "expand", "items": self.elements(limit=250)}
+
+    def _frame_directory(self):
+        """Open the session's frames directory without following a final symlink."""
+        directory = self.trail_dir / "frames"
+        directory.mkdir(exist_ok=True)
+        return os.open(directory, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+
+    @staticmethod
+    def _frame_name(name):
+        return (isinstance(name, str) and name not in {"", ".", ".."}
+                and Path(name).name == name and "/" not in name and "\\" not in name)
+
+    def _verified_frame(self, name):
+        """Read only a registered, unchanged regular file in this session's frames directory."""
+        expected = self.__dict__.get("_frame_hashes", {}).get(name) if self._frame_name(name) else None
+        if not expected:
             return None
-        if self.frame == getattr(self, "last_saved_frame", None):
-            return self.last_saved_name  # Unchanged screen: reuse the frame so a replay shows only real changes.
-        self.frame_seq = getattr(self, "frame_seq", 0) + 1
-        name = f"{prefix}-{self.frame_seq:04d}.jpg"
         try:
-            (self.trail_dir / "frames").mkdir(exist_ok=True)
-            (self.trail_dir / "frames" / name).write_bytes(base64.b64decode(self.frame))
+            directory = self._frame_directory()
+            try:
+                fd = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=directory)
+                try:
+                    if not stat.S_ISREG(os.fstat(fd).st_mode):
+                        return None
+                    with os.fdopen(fd, "rb") as source:
+                        fd = -1
+                        data = source.read()
+                finally:
+                    if fd != -1:
+                        os.close(fd)
+            finally:
+                os.close(directory)
         except OSError:
             return None
-        self.last_saved_frame, self.last_saved_name = self.frame, name
-        self.__dict__.setdefault("step_frames", []).append(name)
-        return name
+        return data if hashlib.sha256(data).hexdigest() == expected else None
+
+    def _write_frame(self, name, data):
+        """Publish a complete capture once and register its content digest."""
+        if not self._frame_name(name):
+            raise ValueError("Invalid frame name")
+        with self.lock:
+            if name in self.__dict__.get("_frame_hashes", {}):
+                raise FrameExists(name)
+            directory = self._frame_directory()
+            temporary = f".capture-{uuid.uuid4().hex}.tmp"
+            created = False
+            try:
+                fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+                             0o600, dir_fd=directory)
+                created = True
+                try:
+                    with os.fdopen(fd, "wb") as output:
+                        fd = -1
+                        output.write(data)
+                finally:
+                    if fd != -1:
+                        os.close(fd)
+                try:
+                    os.link(temporary, name, src_dir_fd=directory, dst_dir_fd=directory, follow_symlinks=False)
+                except FileExistsError as error:
+                    raise FrameExists(name) from error
+                self.__dict__.setdefault("_frame_hashes", {})[name] = hashlib.sha256(data).hexdigest()
+            finally:
+                try:
+                    if created:
+                        os.unlink(temporary, dir_fd=directory)
+                except FileNotFoundError:
+                    pass
+                finally:
+                    os.close(directory)
+
+    def save_frame(self, prefix):
+        """Store capture output for replay; reuse only an intact registered frame."""
+        with self.lock:
+            if not self.frame or not getattr(self, "last_capture_ok", True):
+                return None
+            try:
+                data = base64.b64decode(self.frame, validate=True)
+                if (self.frame == getattr(self, "last_saved_frame", None)
+                        and self._verified_frame(getattr(self, "last_saved_name", None)) == data):
+                    self.__dict__.setdefault("step_frames", []).append(self.last_saved_name)
+                    return self.last_saved_name
+                while True:
+                    self.frame_seq = getattr(self, "frame_seq", 0) + 1
+                    name = f"{prefix}-{self.frame_seq:04d}.jpg"
+                    try:
+                        self._write_frame(name, data)
+                        break
+                    except FrameExists:
+                        continue
+            except (OSError, ValueError):
+                return None
+            self.last_saved_frame, self.last_saved_name = self.frame, name
+            self.__dict__.setdefault("step_frames", []).append(name)
+            return name
+
+    def review_frames(self, files):
+        """Return (name, bytes) for verified capture files, or capture a fresh fallback.
+
+        Provenance confirms the capture pipeline, whose field masking is best effort;
+        it does not guarantee that every secret is masked. Legacy and altered files
+        are never read as review evidence.
+        """
+        with self.lock:
+            # After an actual capture failure, old frames cannot represent the final
+            # screen. Retry once and review only the fresh result if it succeeds.
+            if getattr(self, "last_capture_ok", True):
+                frames = []
+                for name in files[-5:]:
+                    data = self._verified_frame(name)
+                    if data is not None:
+                        frames.append((name, data))
+                if frames and files and frames[-1][0] == files[-1]:
+                    return frames
+            # A bound review must never change its final image after binding.
+            if getattr(self, "_review_frame_name", None):
+                return []
+            self.capture()
+            if not getattr(self, "last_capture_ok", False):
+                return []
+            name = self.save_frame("review")
+            data = self._verified_frame(name)
+            return [(name, data)] if data is not None else []
 
     def keep_frame(self):
         done = len(self.history)
@@ -344,16 +566,41 @@ class Session:
         # Hide our caption box for the shot: frames show the page as a user sees it, so the UI review never
         # mistakes the agent's own overlay for broken layout. The target highlight stays visible.
         toggle = ("(v => { const r = document.getElementById('laya-agent-overlay');"
-                  " const b = r && r.shadowRoot && r.shadowRoot.querySelector('.box'); if (b) b.style.visibility = v; })")
+                  " if (r) r.style.visibility = v; })")
         try:
             self.browser.call("Runtime.evaluate", expression=f"{toggle}('hidden')", _response_timeout=2)
         except Exception:
             pass
+        self.last_capture_ok = False
+        self._visual_frame_marker = None
+        self._visual_frame_state = None
+
+        def visual_evidence(marker):
+            if marker is None:
+                return None, None
+            try:
+                return self.browser.evaluate(MARKER), self.browser.visual_state()
+            except Exception:
+                return None, None
+
         try:
-            self.frame = self.browser.call("Page.captureScreenshot", format="jpeg", quality=55,
-                                           _response_timeout=4)["data"]
+            marker = (self.page or {}).get("marker")
+            before, visual_before = visual_evidence(marker)
+            self.frame = self.browser.capture_masked(format="jpeg", quality=85, _response_timeout=4)
+            self.frame_captured_at = time.time()
+            self.frame_id = hashlib.sha256(self.frame.encode()).hexdigest()[:20]
+            after, visual_after = visual_evidence(marker)
+            if (marker is not None and before == marker and after == marker
+                    and visual_before is not None and visual_before == visual_after):
+                self._visual_frame_marker = marker
+                self._visual_frame_state = visual_before
+            self.last_capture_ok = bool(self.frame)
         except Exception:
-            pass
+            self.frame = None
+            self.last_saved_frame = None
+            self.browser.last_screenshot = None
+            if self.page:
+                self.page.pop("screenshot", None)
         finally:
             try:
                 self.browser.call("Runtime.evaluate", expression=f"{toggle}('')", _response_timeout=2)
@@ -367,7 +614,7 @@ class Session:
     # Layer 3  orchestrator (the controlling agent, or the pilot): goals, hints, checks, plan marks, checkpoints.
     # Proposals and the trail name the layer by role ("decision", "escalation"); `decision_engine` says which
     # engine decided. Runs written before the rename used "laya", "jev" and "mercury"; readers map them.
-    ENGINES = ("stack", "escalation", "laya", "jev")
+    ENGINES = ("stack", "escalation", "laya", "jev", "liquid")
     ENGINE_ALIASES = {"mercury": "escalation"}
 
     def set_goal(self, goal):
@@ -410,10 +657,12 @@ class Session:
         if agent.state["status"] in {"done", "blocked", "aborted"}:
             self.agent = None
             agent = self.autonomous(self.laya_goal(), engine)
-        agent.state["page"] = self.page
+        self.model_actions(250)
+        agent._session_managed = True
+        agent.state["page"] = self._decision_page(agent)
         agent.command("predict")
         decision = agent.state["decision"]
-        if engine == "jev":
+        if engine in {"jev", "liquid"}:
             self._jev_field_value(agent, decision)
         return decision
 
@@ -428,7 +677,7 @@ class Session:
         try:
             text, helper = field_text(field_context(agent.state["goal"], action, self.page, agent.state["history"]))
         except ValueError as error:
-            raise SessionError(f"Jev chose {action.get('label')!r}, but {error}") from error
+            raise SessionError(f"{agent.state['decision_engine'].title()} chose {action.get('label')!r}, but {error}") from error
         decision["text"] = text
         agent.state["text_calls"].append({**helper, "field": action["label"], "value": text})
 
@@ -498,6 +747,7 @@ class Session:
         tabs = [{"tab": f"TAB:{i}", "title": t["title"][:80], "url": t["url"][:160], "current": t["current"]}
                 for i, t in enumerate(self.tab_list)]
         try:
+            self.model_actions(250)
             choice, meta = escalation_choose(self.goal, self.page, self.history, self.hints,
                                           candidates=candidates, escalation=escalation, plan=plan, tabs=tabs)
         except ValueError as error:
@@ -505,98 +755,117 @@ class Session:
         self.fresh_hint = False
         return choice, meta.get("model")
 
+    def _decision_page(self, agent):
+        """Bind a hosted visual decision to this observation, never a cached failed capture."""
+        if not getattr(agent, "screenshots", False):
+            return self.page
+        if not getattr(self, "last_capture_ok", False) or not self.frame:
+            raise SessionError("A fresh screenshot is required; no action executed.")
+        return {**self.page, "screenshot": self.frame, "screenshot_stale": False}
+
     def suggest(self, engine="stack", hint=None, goal=None):
         """Propose exactly one next step. Nothing executes until accept."""
         engine = self.ENGINE_ALIASES.get(engine, engine)
         if engine not in self.ENGINES:
             raise SessionError(f"Engine must be one of {', '.join(self.ENGINES)}")
-        with self.lock:
-            if goal:
-                self.set_goal(goal)
-            if not self.goal:
-                raise SessionError('Set a goal first (reverie goal "...")')
-            if hint:
-                self.add_hint(hint)
-            self.observe()
-            started = time.perf_counter()
-            layer, model, escalation, decision_confidence, candidates = engine, engine, None, None, None
-            decided = {}
-            fast = self.fast_engine() if engine in {"stack", "escalation"} else engine
-            if engine in {"stack", "laya", "jev"}:
-                try:
-                    decision = self._fast_propose(fast)
-                    decision_confidence = round(float(decision.get("confidence", 0.0)), 3)
-                    candidates = self._laya_candidates(decision, self.page)
-                    choice = {"choice": decision["choice"], "text": decision.get("text"),
-                              "confidence": decision_confidence,
-                              "reason": f"{decision.get('operation', '')} {decision.get('target', '')}".strip()}
-                    layer = DECISION
-                    # What the fast decision cost, for the trail: model, its own latency, and USD (Jev reports it).
-                    usage = decision.get("usage") or {}
-                    decided = {"decision_model": decision.get("model"), "decision_ms": decision.get("latency_ms"),
-                               "decision_cost": usage.get("cost")}
-                    escalation = self._escalation(decision) if engine == "stack" else None
-                    typed = (decision.get("text") or "").strip().lower()
-                    if engine == "jev" and typed and not self.stated_value(typed):
-                        # Without the escalation model behind it, Jev keeps the same rule: only stated values.
-                        raise SessionError(f"Jev would type {decision['text']!r}, which the goal does not state. "
-                                           "Nothing executed; state the value in quotes.")
-                except (SessionError, StalePage, RuntimeError, ValueError) as error:
-                    if isinstance(error, MissingKey):
-                        raise SessionError(str(error)) from None  # A missing key is a setup error, not doubt.
-                    if engine != "stack":
-                        raise SessionError(f"{engine} could not decide: {error}") from error
-                    escalation = f"{self.fast_engine().title()} unavailable: {error}"
-            escalation_off = escalation_disabled()
-            if escalation and escalation_off and engine == "stack" and choice.get("choice") == "DONE" \
-                    and escalation.endswith("reported DONE"):
-                # Nobody is behind the decision engine to confirm DONE; report it as DONE and let the caller check.
-                escalation = None
-            elif escalation and escalation_off and engine == "stack":
-                # Escalation off: a doubtful step goes back to the pilot (which can act by sight) unexecuted.
-                choice = {"choice": "BLOCKED", "text": None, "confidence": 0.0,
-                          "reason": f"{self.fast_engine().title()} escalated ({escalation}) and the escalation model "
-                                    "is off"}
+        scope = getattr(self, "scope_revision", 0)
+        if getattr(self, "coordination", None):
+            with self.lock:
+                self._validate_control()
+        if goal:
+            self.set_goal(goal)
+        if not self.goal:
+            raise SessionError('Set a goal first (reverie goal "...")')
+        if hint:
+            self.add_hint(hint)
+        self.observe()
+        started = time.perf_counter()
+        layer, model, escalation, decision_confidence, candidates = engine, engine, None, None, None
+        decided = {}
+        fast = self.fast_engine() if engine in {"stack", "escalation"} else engine
+        if engine in {"stack", "laya", "jev", "liquid"}:
+            try:
+                decision = self._fast_propose(fast)
+                decision_confidence = round(float(decision.get("confidence", 0.0)), 3)
+                candidates = self._laya_candidates(decision, self.page)
+                choice = {"choice": decision["choice"], "text": decision.get("text"),
+                          "confidence": decision_confidence,
+                          "reason": f"{decision.get('operation', '')} {decision.get('target', '')}".strip()}
                 layer = DECISION
-            elif engine == "escalation" and escalation_off:
-                raise SessionError("The escalation model is off (REVERIE_ESCALATION=off)")
-            elif engine == "escalation" or escalation:
-                if self.agent and self.agent.state.get("decision"):
-                    self.agent.state["decision"] = None  # The escalation model overrules the unexecuted pick.
-                choice, model = self._escalate(candidates, escalation)
-                layer = ESCALATION
-                typed = (choice.get("text") or "").strip().lower()
-                if typed and typed not in (self.goal + " " + " ".join(self.hints)).lower() \
-                        and typed not in getattr(self, "allow_values", []):
-                    # The escalation model has the same rule: it types only values the goal or hints state.
-                    raise SessionError(f"The escalation model would type {choice['text']!r}, which the goal does not "
-                                       "state. "
+                # What the fast decision cost, for the trail: model, its own latency, and USD (Jev reports it).
+                usage = decision.get("usage") or {}
+                decided = {"decision_model": decision.get("model"), "decision_ms": decision.get("latency_ms"),
+                           "decision_cost": usage.get("cost")}
+                escalation = self._escalation(decision) if engine == "stack" else None
+                typed = (decision.get("text") or "").strip().lower()
+                if engine in {"jev", "liquid"} and typed and not self.stated_value(typed):
+                    # Without the escalation model behind it, Jev keeps the same rule: only stated values.
+                    raise SessionError(f"{engine.title()} would type {decision['text']!r}, which the goal does not state. "
                                        "Nothing executed; state the value in quotes.")
+            except (SessionError, StalePage, RuntimeError, ValueError) as error:
+                if isinstance(error, CodexError):
+                    raise
+                if isinstance(error, MissingKey):
+                    raise SessionError(str(error)) from None  # A missing key is a setup error, not doubt.
+                if engine != "stack":
+                    raise SessionError(f"{engine} could not decide: {error}") from error
+                choice = {"choice": "BLOCKED", "text": None, "confidence": 0.0, "reason": str(error)}
+                escalation = f"{self.fast_engine().title()} unavailable: {error}"
+        escalation_off = escalation_disabled()
+        if escalation and escalation_off and engine == "stack" and choice.get("choice") == "DONE" \
+                and escalation.endswith("reported DONE"):
+            # Nobody is behind the decision engine to confirm DONE; report it as DONE and let the caller check.
+            escalation = None
+        elif escalation and escalation_off and engine == "stack":
+            # Escalation off: a doubtful step goes back to the pilot (which can act by sight) unexecuted.
+            choice = {"choice": "BLOCKED", "text": None, "confidence": 0.0,
+                      "reason": f"{self.fast_engine().title()} escalated ({escalation}) and the escalation model "
+                                "is off"}
+            layer = DECISION
+        elif engine == "escalation" and escalation_off:
+            raise SessionError("The escalation model is off (REVERIE_ESCALATION=off)")
+        elif engine == "escalation" or escalation:
+            if self.agent and self.agent.state.get("decision"):
+                self.agent.state["decision"] = None  # The escalation model overrules the unexecuted pick.
+            choice, model = self._escalate(candidates, escalation)
+            layer = ESCALATION
+            typed = (choice.get("text") or "").strip().lower()
+            if typed and typed not in (self.goal + " " + " ".join(self.hints)).lower() \
+                    and typed not in getattr(self, "allow_values", []):
+                # The escalation model has the same rule: it types only values the goal or hints state.
+                raise SessionError(f"The escalation model would type {choice['text']!r}, which the goal does not "
+                                   "state. "
+                                   "Nothing executed; state the value in quotes.")
+        action = next((a for a in self.page["actions"] if a["id"] == choice["choice"]), None)
+        avoided = action and any(a in action.get("label", "").lower() for a in getattr(self, "avoid", []))
+        if avoided and layer != ESCALATION:
+            # The decision engine picked a control the pilot fenced off: let the escalation model choose.
+            choice, model = self._escalate(candidates, f"{fast.title()} chose a control the pilot said to avoid")
+            layer = ESCALATION
             action = next((a for a in self.page["actions"] if a["id"] == choice["choice"]), None)
             avoided = action and any(a in action.get("label", "").lower() for a in getattr(self, "avoid", []))
-            if avoided and layer != ESCALATION:
-                # The decision engine picked a control the pilot fenced off: let the escalation model choose.
-                choice, model = self._escalate(candidates, f"{fast.title()} chose a control the pilot said to avoid")
-                layer = ESCALATION
-                action = next((a for a in self.page["actions"] if a["id"] == choice["choice"]), None)
-                avoided = action and any(a in action.get("label", "").lower() for a in getattr(self, "avoid", []))
-            word = commit_word((action or {}).get("label")) if action and action["kind"] == "click" \
-                and action.get("role") not in {"radio", "checkbox", "option", "tab"} else None
-            asked = (self.goal + " " + " ".join(self.hints)).lower()
-            if word and word not in asked and not getattr(self, "allow_commit", False):
-                # Committing clicks (Yes, Delete, Submit, Save...) run only when the intent names them.
-                raise SessionError(f"The stack wanted to click {action.get('label')!r}, which commits a change the "
-                                   "intent did not ask for. Nothing executed; name it in the intent to allow it.")
-            if action and getattr(self, "read_only", False) and action["kind"] in {"fill", "select"}:
-                raise SessionError(f"This intent is read-only; the stack wanted to change {action.get('label')!r}. "
-                                   "Nothing executed.")
-            if avoided:
-                raise SessionError(f"The stack chose {action.get('label')!r}, which the pilot said to avoid. "
-                                   "Nothing executed.")
-            label = self.phrase(action, choice["text"]) if action else choice["choice"]
-            if str(choice["choice"]).startswith("TAB:"):
-                tab = self.tab_list[int(choice["choice"][4:])]
-                label = f"Switching to the tab '{tab['title'][:60]}'"
+        word = commit_word((action or {}).get("label")) if action and action["kind"] == "click" \
+            and action.get("role") not in {"radio", "checkbox", "option", "tab"} else None
+        asked = (self.goal + " " + " ".join(self.hints)).lower()
+        if word and word not in asked and not getattr(self, "allow_commit", False):
+            # Committing clicks (Yes, Delete, Submit, Save...) run only when the intent names them.
+            raise SessionError(f"The stack wanted to click {action.get('label')!r}, which commits a change the "
+                               "intent did not ask for. Nothing executed; name it in the intent to allow it.")
+        if action and getattr(self, "read_only", False) and action["kind"] in {"fill", "select"}:
+            raise SessionError(f"This intent is read-only; the stack wanted to change {action.get('label')!r}. "
+                               "Nothing executed.")
+        if avoided:
+            raise SessionError(f"The stack chose {action.get('label')!r}, which the pilot said to avoid. "
+                               "Nothing executed.")
+        label = self.phrase(action, choice["text"]) if action else choice["choice"]
+        if str(choice["choice"]).startswith("TAB:"):
+            tab = self.tab_list[int(choice["choice"][4:])]
+            label = f"Switching to the tab '{tab['title'][:60]}'"
+        with self.lock:
+            if getattr(self, "coordination", None):
+                self._validate_control()
+            if scope != getattr(self, "scope_revision", 0):
+                raise SessionError("Instructions changed while choosing; observe and suggest again")
             self.pending = {**choice, "engine": engine, "layer": layer, "model": model, "ref": choice["choice"],
                             "label": label, "escalation": escalation, "decision_engine": fast,
                             "decision_confidence": decision_confidence,
@@ -620,6 +889,7 @@ class Session:
     def public_pending(self):
         return {k: v for k, v in self.pending.items() if k != "fingerprint"} if self.pending else None
 
+    @browser_operation
     def accept(self):
         with self.lock:
             proposal = self.pending
@@ -647,6 +917,10 @@ class Session:
                     "url": self.page["url"], "by": proposal["layer"]})
                 return result
             target = next((a for a in self.page["actions"] if a["id"] == proposal["ref"]), None)
+            if target and target.get("kind") == "expand":
+                if self.agent:
+                    self.agent.state["decision"] = None
+                return self.expand(target["id"])
             if proposal["layer"] == DECISION and target and target.get("offscreen"):
                 self.agent.state["decision"] = None
                 result = self.act(proposal["ref"], text=proposal.get("text"), narration=proposal["label"],
@@ -656,6 +930,17 @@ class Session:
                     "kind": result.get("kind"), "choice": proposal["ref"], "text": proposal.get("text"),
                     "page_changed": result.get("page_changed"), "url": result.get("url_after"),
                     "by": proposal["layer"]})
+                return result
+            if proposal["layer"] == DECISION and getattr(self, "visual_mode", None) == "primary":
+                self.agent.state["decision"] = None
+                result = self.act(proposal["ref"], text=proposal.get("text"), narration=proposal["label"],
+                                  by=proposal["layer"])
+                if result.get("executed") is not False:
+                    self.agent.state["history"].append({
+                        "step": len(self.agent.state["history"]) + 1, "action": result.get("label"),
+                        "kind": result.get("kind"), "choice": proposal["ref"], "text": result.get("text"),
+                        "value": result.get("value"), "page_changed": result.get("page_changed"),
+                        "url": result.get("url_after"), "by": proposal["layer"]})
                 return result
             if proposal["layer"] == DECISION:
                 agent = self.agent
@@ -713,7 +998,14 @@ class Session:
         stale = 0
         still = 0  # Consecutive executed actions that changed nothing on the page.
         # Keep going while the page responds; a caller's max_steps is a floor, the ceiling is the safety net.
-        for _ in range(max(max_steps or 0, self.CEILING)):
+        primary_pilot = getattr(self, "visual_mode", None) == "primary" and (
+            getattr(self._command_local, "actor", None) == "pilot")
+        budget = 1 if primary_pilot else max(max_steps or 0, self.CEILING)
+        for _ in range(budget):
+            if (getattr(self, "pilot_thread", None) is threading.current_thread()
+                    and (getattr(self, "pilot_stop_requested", False) or getattr(self, "closed", False))):
+                reason = "stopped by the orchestrator"
+                break
             if self.pending_checkpoint():
                 reason = "admin"
                 break
@@ -728,9 +1020,13 @@ class Session:
             if proposal["layer"] == ESCALATION and proposal["confidence"] < min_confidence:
                 reason = "low_confidence"
                 break
+            if (getattr(self, "pilot_thread", None) is threading.current_thread()
+                    and (getattr(self, "pilot_stop_requested", False) or getattr(self, "closed", False))):
+                reason = "stopped by the orchestrator"
+                break
             try:
-                self.accept()
-            except SessionError as error:
+                result = self.accept()
+            except (SessionError, ControlError) as error:
                 # Nothing executed. A page that moved under the decision is worth one fresh proposal.
                 if "Nothing was executed" in str(error) and stale < 2:
                     stale += 1
@@ -740,7 +1036,8 @@ class Session:
             stale = 0
             layers[proposal["layer"]] += 1
             last = self.history[-1] if self.history else {}
-            still = still + 1 if last.get("page_changed") is False and last.get("kind") != "wait" else 0
+            still = still + 1 if result.get("kind") != "expand" and last.get("page_changed") is False \
+                and last.get("kind") != "wait" else 0
             if still >= self.STALL:
                 steps.append(f"{proposal['layer']}: {proposal['label']}")
                 reason = f"stalled: {self.STALL} actions changed nothing"
@@ -806,6 +1103,12 @@ class Session:
                 command = None  # Model- or page-originated requests describe a need; they never carry a command.
             cp = {"id": uuid.uuid4().hex[:6], "title": title.strip()[:300], "command": command, "step": step,
                   "source": source, "status": "pending", "created": time.strftime("%H:%M:%S"), "result": None}
+            if getattr(self, "coordination", None):
+                request = self.coordination.create_request(
+                    self.testing_session_id, cp["title"], assigned_to="human" if title.startswith("Question:") else "coordinator",
+                    run_id=self.run_id, kind="decision" if title.startswith("Question:") else "checkpoint",
+                    worker_id=self.worker_id, checkpoint_id=cp["id"], step=step)
+                cp["request_id"] = request["id"]
             self.checkpoints.append(cp)
             self.status = "awaiting-admin"
             self.log("checkpoint", **cp)
@@ -813,6 +1116,7 @@ class Session:
             return {"checkpoint": cp, **self.summary()}
 
     def pending_checkpoint(self):
+        self.reconcile_requests()
         return next((c for c in self.checkpoints if c["status"] == "pending"), None)
 
     def resolve_checkpoint(self, checkpoint_id, status, exit_code=None, output=None, note=""):
@@ -824,6 +1128,15 @@ class Session:
                 raise SessionError(f"Checkpoint {checkpoint_id} is already {cp['status']}")
             if status not in {"done", "failed", "skipped"}:
                 raise SessionError("Status must be done, failed, or skipped")
+            if cp.get("request_id"):
+                request = next((r for r in self.coordination.list_requests(self.testing_session_id)
+                                if r["id"] == cp["request_id"]), None)
+                if request and request["status"] != "resolved":
+                    self.coordination.resolve_request(cp["request_id"], {"status": status, "note": note})
+            for answer in (output, note):
+                self.register_secret(answer)
+                for token in re.findall(r"[A-Za-z0-9_-]{4,}", answer or ""):
+                    self.register_secret(token)
             cp.update(status=status, resolved=time.strftime("%H:%M:%S"),
                       result={"exit_code": exit_code, "output": (output or "")[-2000:], "note": note})
             self.log("resolve", id=checkpoint_id, status=status, exit_code=exit_code, note=note)
@@ -834,7 +1147,7 @@ class Session:
             self.say(f"Checkpoint {status}: {cp['title']}" + (f". {note}" if note else ""), speak=False)
             if cp["step"] and self.test:
                 self.mark(cp["step"], "pass" if status == "done" else "fail" if status == "failed" else "skipped",
-                          note or (f"exit {exit_code}" if exit_code is not None else ""))
+                          note or (f"exit {exit_code}" if exit_code is not None else ""), recap=False)
             return {"checkpoint": cp, **self.summary()}
 
     def wait(self, timeout=900.0):
@@ -864,7 +1177,9 @@ class Session:
         for h in self.history:
             who = "orchestrator" if h.get("by", "agent") == "agent" else h["by"]
             counts[who] = counts.get(who, 0) + 1
-        return {**self.summary(), "name": self.name, "frame": self.frame, "history": scrub(self.history[-60:]),
+        return {**self.summary(), "name": self.name, "frame": self.frame if getattr(self, "last_capture_ok", True) else None,
+                "frame_captured_at": getattr(self, "frame_captured_at", None),
+                "frame_id": getattr(self, "frame_id", None), "history": scrub(self.history[-60:]),
                 "checks": self.checks[-20:], "said": self.narrator.spoken[-40:], "test": self.test,
                 "goal": self.goal, "goal_plan": goal_plan, "hints": self.hints[-6:],
                 "pending": self.public_pending(), "checkpoints": self.checkpoints[-10:], "layers": counts,
@@ -891,6 +1206,8 @@ class Session:
 
                 output, _ = chat_json(RECAP, context)
                 summary = str(output.get("summary", "")).strip()[:400]
+            except CodexError:
+                raise
             except Exception:
                 summary = ""
         if not summary:
@@ -919,12 +1236,19 @@ class Session:
             self.log("tidy_tabs", closed=closed)
         return closed
 
-    def plan(self, title, steps, source=None):
+    def plan(self, title, steps, source=None, role="unspecified", purpose=None):
+        if getattr(self, "closed", False):
+            raise SessionError("The session is closed")
         runner = getattr(self, "pilot_thread", None)
         if runner is not None and runner.is_alive() and runner is not threading.current_thread():
             raise SessionError("A pilot is running on the current plan; `pilot stop` first")
         if not steps:
             raise SessionError("A test plan needs at least one step")
+        from ..codex_provider import close as close_codex
+        from ..codex_provider import resume as resume_codex
+
+        close_codex()
+        resume_codex()
         items = []
         for i, text in enumerate(steps):
             admin = text.lower().startswith("[admin]")
@@ -932,8 +1256,11 @@ class Session:
             clean = re.sub(r"^\[admin\]\s*", "", text, flags=re.I)
             clean = re.sub(r"`[^`]*`", "", clean).strip() if admin else clean.replace("`", "")
             items.append({"n": i + 1, "title": clean, "status": "pending", "note": "", "admin": admin,
+                          "checks_from": len(self.checks),
                           "command": command.group(1) if command else None})
-        self.test = {"title": title or "Test", "source": source, "result": "running", "steps": items}
+        self.test = {"title": title or "Test", "source": source, "role": role,
+                     "purpose": purpose or "smoke", "result": "running", "steps": items}
+        self._register_shared_run()
         self.tidy_tabs()  # Each test starts with only its own working tab.
         self.test_home_tab = self.browser.target
         self.log("plan", title=self.test["title"], steps=steps, source=source)
@@ -961,6 +1288,34 @@ class Session:
             self.step_frames = []
         if status == "running" and step.get("admin"):
             self.checkpoint(step["title"], command=step.get("command"), step=n, source="plan")
+        needs_review = status in {"pass", "fail", "blocked"} and not step.get("admin")
+        with self.lock:
+            frame = (self.save_frame("mark") if status != "running" and not needs_review
+                     and self._review_frame_current() else None)
+        if needs_review:
+            review = self.review_ui(step)
+            with self.lock:
+                if review is not None and not self._review_binding_current(getattr(self, "_review_binding", None)):
+                    review = None
+                    step.pop("ui", None)
+                    self._review_observation_invalid = True
+                frame = getattr(self, "_review_frame_name", None) if review is not None else None
+                if status == "pass":
+                    findings = step.get("findings", []) + (review or {}).get("issues", [])
+                    serious = [f for f in findings if f.get("severity") in {"high", "medium"} and f.get("affects_step", True)]
+                    if serious:
+                        status = "fail"
+                        note = "; ".join(f["what"] for f in serious)
+                        step.update(status=status, note=note, diagnosis="visual")
+                    elif getattr(self, "visual_mode", None) == "primary" and review is None:
+                        status = "blocked"
+                        note = "Visual verification unavailable; functional checks alone cannot establish a pass"
+                        step.update(status=status, note=note, diagnosis="visual-unverified")
+        if status == "pass" and not step.get("admin") and getattr(self, "visual_mode", None) == "primary":
+            checks = self.checks[step.get("checks_from", 0):]
+            if not checks or not checks[-1]["passed"]:
+                status, note = "blocked", "Functional verification unavailable; run a check that proves this step"
+                step.update(status=status, note=note, diagnosis="functional-unverified")
         states = [s["status"] for s in steps]
         if "fail" in states:
             self.test["result"] = "fail"
@@ -970,9 +1325,6 @@ class Session:
             self.test["result"] = "pass"
         else:
             self.test["result"] = "running"
-        frame = self.save_frame("mark") if status != "running" else None
-        if status in {"pass", "fail", "blocked"}:
-            self.review_ui(step)
         self.log("mark", step=n, status=status, note=note, result=self.test["result"], frame=frame,
                  ui=step.get("ui"))
         self.write_run_summary()
@@ -986,19 +1338,87 @@ class Session:
             self.say(f"{self.test['title']} result: {self.test['result']}", speak=False)
         return {"test": self.test}
 
+    def _review_frame_current(self):
+        """Require the captured frame to match the current page at the review boundary."""
+        page = self.page or {}
+        marker = page.get("marker")
+        state = getattr(self, "_visual_frame_state", None)
+        if (getattr(self, "_review_observation_invalid", False)
+                or not getattr(self, "last_capture_ok", False) or not getattr(self, "frame", None)
+                or marker is None or getattr(self, "_visual_frame_marker", None) != marker or not state):
+            return False
+        try:
+            return self.browser.evaluate(MARKER) == marker and self.browser.visual_state() == state
+        except Exception:
+            return False
+
+    def _review_identity(self):
+        control = None
+        if getattr(self, "coordination", None):
+            current = self.coordination.worker_control(self.worker_id)
+            control = (current.get("owner"), current.get("epoch"))
+        return ((getattr(self, "observation", None) or {}).get("id"),
+                getattr(self, "scope_revision", None), control, getattr(self, "_pause_requested", False))
+
+    def _review_binding_current(self, binding):
+        try:
+            return (binding is not None and self._review_identity() == binding[0]
+                    and self.frame == binding[1] and self._visual_frame_state == binding[2]
+                    and self._review_frame_name == binding[3] and self._review_frame_current()
+                    and self._verified_frame(binding[3]) == base64.b64decode(binding[1], validate=True))
+        except Exception:
+            return False
+
     def review_ui(self, step):
         """Multimodal UI review of the frames this step produced; findings stay on the step and in the trail."""
         from .pilot import ui_review
 
-        files = list(dict.fromkeys(getattr(self, "step_frames", [])))
+        with self.lock:
+            self._review_frame_name = None
+            self._review_binding = None
+            step.pop("ui", None)
+            observed_state = getattr(self, "_observation_review_state", None)
+            if not self._review_frame_current():
+                if (getattr(self, "_visual_frame_state", None) is not None or observed_state is None
+                        or getattr(self, "_review_observation_invalid", False)):
+                    self._review_observation_invalid = True
+                    return None
+                self.capture()
+            if not self._review_frame_current() or self._visual_frame_state != observed_state:
+                self._review_observation_invalid = True
+                return None
+            state = self._visual_frame_state
+            self.capture()
+            if self._visual_frame_state != state or not self._review_frame_current():
+                self._review_observation_invalid = True
+                return None
+            self._review_frame_name = self.save_frame("mark")
+            if not self._review_frame_name:
+                return None
+            try:
+                binding = (self._review_identity(), self.frame, state, self._review_frame_name)
+            except Exception:
+                self._review_observation_invalid = True
+                return None
+            # Keep the last occurrence so a reused final frame remains the final review image.
+            files = list(reversed(dict.fromkeys(reversed(self.step_frames))))
         if len(files) > 5:  # Spread the sample over the step, always keeping the final screen.
             stride = len(files) / 4
             files = [files[int(i * stride)] for i in range(4)] + [files[-1]]
         review = ui_review(self, step, files)
         if review is None:
             return None
-        step["ui"] = review
-        self.log("ui_review", step=step["n"], **review)
+        with self.lock:
+            if not self._review_binding_current(binding):
+                self._review_observation_invalid = True
+                return None
+            self.capture()
+            if not self._review_binding_current(binding):
+                self._review_observation_invalid = True
+                return None
+            self._review_binding = binding
+            step["ui"] = review
+            self.log("ui_review", step=step["n"], **review)
         worst = next((s for s in ("high", "medium", "low") if any(i["severity"] == s for i in review["issues"])), None)
         self.say(f"UI review, step {step['n']}: " + (f"{len(review['issues'])} issue(s), worst {worst}. "
                  if worst else "no problems. ") + review["summary"], speak=False)
@@ -1009,6 +1429,8 @@ class Session:
         test = self.test or {}
         steps = test.get("steps") or []
         write_run_summary(self.trail_dir, {
+            **self.shared_summary(),
+            "role": test.get("role"), "purpose": test.get("purpose"),
             "spec_id": spec_id(test.get("source"), test.get("title")),
             "title": test.get("title"),
             "source": test.get("source"),
@@ -1019,14 +1441,16 @@ class Session:
             "steps_done": sum(1 for st in steps if st["status"] not in {"pending", "running"}),
             "steps_total": len(steps),
         })
+        self._sync_shared_run(ended)
 
     def summary(self):
         page = self.page or {}
         return {
+            **self.shared_summary(),
             "status": self.status,
             "url": scrub(page.get("url")),
             "title": page.get("title"),
-            "elements": sum(1 for a in page.get("actions", []) if a["kind"] in {"click", "fill", "select"}),
+            "elements": sum(1 for a in page.get("actions", []) if a["kind"] in {"click", "fill", "select", "expand"}),
             "steps": len(self.history),
             "prompt": self.prompt,
             "caption": self.caption,
@@ -1067,7 +1491,8 @@ class Session:
         if highlight:
             self.capture()  # Show the highlighted target on the watch page before the action runs.
         self.narrator.say(text, wait=wait)
-        self.log("say", text=text)
+        self.log("say", text=text, step=len(self.history),
+                 utterance_id=getattr(getattr(self.narrator, "_last_ticket", None), "id", None))
 
     # ---- resolution --------------------------------------------------------------------------------
     def drain_dialogs(self):
@@ -1093,8 +1518,15 @@ class Session:
             f"window.__jevFast?.nodes.get({node})?.scrollIntoView({{block: 'center', inline: 'center'}})"))
         time.sleep(0.3)
         self.observe()
-        same = [a for a in self.page["actions"] if a.get("node") == node and a["kind"] == action["kind"]
-                and a.get("value") == action.get("value")]
+        observed = list(self.page["actions"])
+        for children in self.page.get("action_buckets", {}).values():
+            observed.extend(children)
+        observed = list({a["id"]: a for a in observed}.values())
+        same = [a for a in observed if a.get("node") == node and a["kind"] == action["kind"]
+                and a.get("value") == action.get("value")
+                and a.get("option_index") == action.get("option_index")
+                and a.get("option_label") == action.get("option_label")
+                and a.get("label") == action.get("label")]
         if len(same) != 1 or same[0].get("offscreen"):
             raise SessionError("The element could not be brought into view. Nothing was executed.")
         self.log("reveal", node=node, label=action.get("label"))
@@ -1143,15 +1575,34 @@ class Session:
             matches = exact or [a for a in actions if needle in a.get("label", "").lower()]
         else:
             raise SessionError("Name an element id (e7) or --label")
-        if kind:
+        if kind and option is None:
             matches = [a for a in matches if a["kind"] == kind]
         if option is not None:
-            node = {a.get("node") for a in matches}
+            node = {a.get("node") for a in matches if a.get("node") is not None}
             wanted = option.lower()
+            buckets = (self.page or {}).get("action_buckets", {})
+            all_actions = list(getattr(self, "_bucket_root", actions))
+            for children in buckets.values():
+                all_actions.extend(children)
+            all_actions = list({a["id"]: a for a in all_actions}.values())
+            for match in matches:
+                if match.get("kind") != "expand":
+                    continue
+                pending, seen = [match.get("bucket")], set()
+                while pending:
+                    bucket = pending.pop()
+                    if bucket in seen:
+                        continue
+                    seen.add(bucket)
+                    for child in buckets.get(bucket, []):
+                        if child.get("kind") == "expand":
+                            pending.append(child.get("bucket"))
+                        elif child.get("kind") == "select" and child.get("node") is not None:
+                            node.add(child["node"])
             matches = [
-                a for a in actions
-                if a["kind"] == "select" and a.get("node") in node
-                and (" ".join(a["label"].split(" → ")[-1].split()).lower() == wanted
+                a for a in all_actions
+                if a["kind"] == "select" and not a.get("disabled") and a.get("node") in node
+                and (" ".join(a.get("option_label", a["label"].split(" → ")[-1]).split()).lower() == wanted
                      or str(a.get("value", "")).lower() == wanted)
             ]
         if len(matches) != 1:
@@ -1170,16 +1621,51 @@ class Session:
             return action["label"]
         if action["kind"] == "wait":
             return "Waiting for the page to update"
+        if action["kind"] == "expand":
+            return f"Opening {label}"
         return f"Clicking {label}"
 
+    def register_secret(self, value=None, node=None, point=None):
+        """Invalidate prior images when a value or field becomes sensitive."""
+        if not value and node is None and point is None:
+            return
+        self._invalidate_secret_frames()
+        self.browser.register_secret(value, node, point)
+
+    def _invalidate_secret_frames(self):
+        with self.lock:
+            self.frame = None
+            self.last_capture_ok = False
+            self.last_saved_frame = None
+            self.last_saved_name = None
+            self.step_frames = []
+            self._review_frame_name = None
+            self._review_binding = None
+            self._review_observation_invalid = True
+            self.frame_id = None
+            self._visual_frame_marker = None
+            self._visual_frame_state = None
+            self._observation_review_state = None
+            if self.page:
+                self.page.pop("screenshot", None)
+
+    @browser_operation
     def act(self, ref=None, label=None, kind=None, text=None, option=None, narration=None, redact=False,
             by="orchestrator", escalation=None, hint=None, value=None):
         with self.lock:
             if option is not None:
                 kind = None
             action = self.find(ref, label, kind, option, hint, value)
+            if action["kind"] == "expand":
+                if text is not None:
+                    raise SessionError("An action bucket does not take text")
+                return self.expand(action["id"])
             if action.get("offscreen"):
                 action = self.reveal(action)
+                if getattr(self, "visual_mode", None) == "primary" and getattr(self._command_local, "actor", None) == "pilot":
+                    self.observe()
+                    self.log("revealed", ref=action["id"], label=action.get("label"))
+                    return {"kind": "revealed", "label": action.get("label"), "executed": False, **self.summary()}
             if action["kind"] == "wait":
                 # Waiting mutates nothing, so it needs no freshness guard; an animating menu must not refuse it.
                 self.say(narration or "Waiting for the page to update", speak=False)
@@ -1194,6 +1680,10 @@ class Session:
                 raise SessionError(f"{action['id']} is a text field; pass the text to type")
             if action["kind"] != "fill" and text is not None:
                 raise SessionError(f"{action['id']} is a {action['kind']} target; it does not take text")
+            if action["kind"] == "fill" and (redact or self.browser.secret_matches(text)):
+                if type(action.get("node")) is not int:
+                    logging.warning("Screenshot masking: sensitive field identity could not be inspected.")
+                self.register_secret(text, action.get("node"))
             page = self.page
             self.status = "acting"
             self.say(narration or self.phrase(action, text, secret=redact), highlight=action.get("rect"), speak=False)
@@ -1233,24 +1723,49 @@ class Session:
             step["url_after"] = self.page["url"]
             return {**step, **self.summary()}
 
+    @browser_operation
+    def visual_act(self, x, y, text=None):
+        """Act on a point in the latest screenshot, in viewport CSS pixels."""
+        from .visual import visual_act
+
+        return visual_act(self, x, y, text=text)
+
+    @browser_operation
+    def visual_hover(self, x, y):
+        """Hover over a point in the latest screenshot, in viewport CSS pixels."""
+        from .visual import visual_hover
+
+        return visual_hover(self, x, y)
+
+    @browser_operation
     def hover(self, ref=None, label=None):
-        """Move the pointer over an observed element (opens hover menus). No click, no input."""
+        """Move the pointer over an observed element without clicking or typing."""
         with self.lock:
             action = self.resolve(ref, label, "click")
-            rect = action.get("rect")
-            if not rect:
-                raise SessionError(f"{action['id']} has no position to hover")
-            self.say(f"Hovering over {action.get('label', 'element')}", highlight=rect, speak=False)
-            x, y = rect["x"] + rect["w"] / 2, rect["y"] + rect["h"] / 2
-            self.browser.call("Input.dispatchMouseEvent", type="mouseMoved", x=x, y=y)
-            time.sleep(0.4)
-            step = {"step": len(self.history) + 1, "id": action["id"], "kind": "hover",
-                    "label": action.get("label"), "text": None, "url": self.page["url"], "by": "orchestrator"}
-            self.history.append(step)
-            self.log("act", **step)
-            self.observe()
-            return {**step, **self.summary()}
+            return self._hover_action(action)
 
+    def _hover_action(self, action):
+        if any(a and a.lower() in (action.get("label") or "").lower() for a in getattr(self, "avoid", [])):
+            raise SessionError("The target is on the avoid list. Nothing executed.")
+        if not action.get("rect"):
+            raise SessionError(f"{action['id']} has no position to hover")
+        page = self.page
+        self.say(f"Hovering over {action.get('label', 'element')}", highlight=action["rect"], speak=False)
+        try:
+            self.browser.act({**action, "kind": "hover"}, page)
+        except StalePage as error:
+            self.observe()
+            raise SessionError(f"{error} Nothing was executed; observe and choose again.") from error
+        time.sleep(0.4)
+        step = {"step": len(self.history) + 1, "id": action["id"], "kind": "hover",
+                "label": action.get("label"), "text": None, "url": page["url"],
+                "by": getattr(self._command_local, "actor", None) or "orchestrator"}
+        self.history.append(step)
+        self.log("act", **step)
+        self.observe()
+        return {**step, **self.summary()}
+
+    @browser_operation
     def cmd_dialog(self, accept=True, text=None):
         """Answer a native alert/confirm/prompt that is blocking the page."""
         params = {"accept": bool(accept)}
@@ -1264,12 +1779,14 @@ class Session:
         self.status = "ready"
         return self.observe()
 
+    @browser_operation
     def secret(self, value, field=None):
         with self.lock:
             target = self.browser.evaluate(f"{SECRET_TARGET}({json.dumps(field or '')})")
             if not target or target.get("count") != 1 or "x" not in target:
                 count = (target or {}).get("count", 0)
                 raise SessionError(f"Expected one visible, uncovered password field, found {count}")
+            self.register_secret(value, point=[target["x"], target["y"]])
             self.status = "acting"
             self.say(f"Entering the {field or 'password'} secret", highlight=target["rect"], speak=False)
             x, y = target["x"], target["y"]
@@ -1287,6 +1804,7 @@ class Session:
             self.observe()
             return {**step, **self.summary()}
 
+    @browser_operation
     def press(self, key):
         if key not in KEYS:
             raise SessionError(f"Key must be one of {', '.join(KEYS)}")
@@ -1305,6 +1823,7 @@ class Session:
             self.observe()
             return {**step, **self.summary()}
 
+    @browser_operation
     def goto(self, url):
         if not url.startswith(("http://", "https://")):
             raise SessionError("Only http and https URLs")
@@ -1320,6 +1839,7 @@ class Session:
     def tabs(self):
         return self.browser.tabs()
 
+    @browser_operation
     def back(self):
         """The browser's Back button: return to the previous page in this tab's history."""
         with self.lock:
@@ -1365,6 +1885,7 @@ class Session:
     def cmd_back(self):
         return self.back()
 
+    @browser_operation
     def open_tab(self, url, isolated=False):
         """Open a URL in a new tab of this session (any origin). Isolated tabs get a fresh cookie jar, so a
         link can be tested signed out while the signed-in tab stays open."""
@@ -1377,6 +1898,7 @@ class Session:
             self.log("open_tab", url=url, isolated=isolated, frame=self.save_frame("nav"))
             return result
 
+    @browser_operation
     def close_tab(self):
         with self.lock:
             others = [t for t in self.browser.tabs() if not t["current"] and t["url"] != "about:blank"]
@@ -1389,6 +1911,7 @@ class Session:
             self.log("close_tab", target=closing, url=self.page["url"], frame=self.save_frame("nav"))
             return result
 
+    @browser_operation
     def switch(self, target_id=None):
         with self.lock:
             tabs = self.browser.tabs()
@@ -1446,10 +1969,25 @@ class Session:
 
     def screenshot(self, path=None):
         with self.lock:
-            data = self.browser.call("Page.captureScreenshot", format="png")["data"]
+            try:
+                data = self.browser.capture_masked(format="png")
+            except Exception:
+                self.frame = None
+                self.last_capture_ok = False
+                self.last_saved_frame = None
+                if self.page:
+                    self.page.pop("screenshot", None)
+                raise
             target = Path(path) if path else self.trail_dir / f"{time.strftime('%H%M%S')}-{len(self.history):03d}.png"
             target.parent.mkdir(parents=True, exist_ok=True)
-            target.write_bytes(base64.b64decode(data))
+            image = base64.b64decode(data, validate=True)
+            if os.path.abspath(target.parent) == os.path.abspath(self.trail_dir / "frames"):
+                try:
+                    self._write_frame(target.name, image)
+                except FrameExists:
+                    raise SessionError("Frame name already exists; choose a new screenshot path.") from None
+            else:
+                target.write_bytes(image)
             self.log("screenshot", path=str(target))
             return {"path": str(target)}
 
@@ -1459,6 +1997,11 @@ class Session:
         with self.lock:
             prompt_id = uuid.uuid4().hex[:8]
             self.prompt = {"id": prompt_id, "question": question, "choices": choices or [], "allow_text": allow_text}
+            if getattr(self, "coordination", None):
+                request = self.coordination.create_request(
+                    self.testing_session_id, question, assigned_to="human", run_id=self.run_id,
+                    kind="decision", worker_id=self.worker_id, choices=choices or [], allow_text=allow_text)
+                self.prompt["request_id"] = request["id"]
             self.external_reply = None
             self.status = "waiting"
             self.say(question)
@@ -1467,12 +2010,20 @@ class Session:
         answer = None
         while time.monotonic() < deadline:
             with self.lock:
+                self.reconcile_requests()
                 reply = self.external_reply or self.render()
                 if reply and reply.get("id") == prompt_id:
                     answer = {"choice": reply.get("choice"), "text": reply.get("text") or ""}
+                    self.register_secret(answer["text"])
                     break
             time.sleep(0.25)
         with self.lock:
+            request_id = (self.prompt or {}).get("request_id")
+            if request_id:
+                request = next((r for r in self.coordination.list_requests(self.testing_session_id)
+                                if r["id"] == request_id), None)
+                if request and request["status"] != "resolved":
+                    self.coordination.resolve_request(request_id, answer or {"timed_out": True})
             self.prompt = None
             self.status = "ready"
             self.render()
@@ -1486,6 +2037,7 @@ class Session:
         with self.lock:
             if not self.prompt:
                 raise SessionError("Nothing is waiting for input")
+            self.register_secret(text)
             self.external_reply = {"id": self.prompt["id"], "choice": choice, "text": text}
             return {"answered": self.prompt["id"]}
 
@@ -1520,7 +2072,8 @@ class Session:
             try:
                 agent.command("predict")
             except StalePage:
-                state["page"] = self.browser.observe(screenshot=False)
+                state["page"] = self.browser.observe(
+                    screenshot=agent.screenshots, screenshot_fallback=agent.screenshot_fallback)
                 agent.command("predict")
             decision = state["decision"]
             choice = decision["choice"]
@@ -1535,12 +2088,17 @@ class Session:
                     state["decision"] = None
                     state["status"] = "aborted" if answer["choice"] == "Stop" else "ready"
                     return {"status": state["status"], "skipped": words, **self.summary()}
+        if getattr(self, "coordination", None):
+            self._narration_boundary()
         with self.lock:
+            if getattr(self, "coordination", None):
+                self._validate_control()
             origin = self.browser.evaluate("performance.timeOrigin")
             try:
                 agent.command("act", {"fingerprint": state["page"]["fingerprint"]})
             except StalePage as error:
-                state["page"] = self.browser.observe(screenshot=False)
+                state["page"] = self.browser.observe(
+                    screenshot=agent.screenshots, screenshot_fallback=agent.screenshot_fallback)
                 state["status"] = "ready"
                 return {"status": "stale", "detail": str(error), **self.summary()}
             if state["history"]:
@@ -1572,12 +2130,35 @@ class Session:
     def note(self, text):
         self.notes = getattr(self, "notes", [])
         self.notes.append(text.strip()[:500])
+        if getattr(self, "coordination", None):
+            self.scope_revision += 1
+            self.pending = None
         self.log("note", text=self.notes[-1])
         return {"notes": self.notes, **self.summary()}
 
     PILOT_STUCK = int(setting("REVERIE_PILOT_STUCK", "12"))
 
     def pilot(self, max_ops=150, through=None):
+        if not getattr(self, "coordination", None):
+            return self._pilot_loop(max_ops, through)
+        with self.lock:
+            current = self.coordination.worker_control(self.worker_id)
+            if current["owner"] != "coordinator":
+                raise SessionError(f"Cannot start pilot while {current['owner']} owns control")
+            control = self.coordination.transfer_control(self.worker_id, "coordinator", current["epoch"], "pilot")
+            self._pause_requested = False
+            self.pilot_stop_requested = False
+        try:
+            with self.command_context("pilot", epoch=control["epoch"]):
+                result = self._pilot_loop(max_ops, through)
+        finally:
+            with self.lock:
+                current = self.coordination.worker_control(self.worker_id)
+                if current["owner"] == "pilot" and current["epoch"] == control["epoch"]:
+                    self.coordination.transfer_control(self.worker_id, "pilot", current["epoch"], "coordinator")
+        return {**result, **self.summary()}
+
+    def _pilot_loop(self, max_ops=150, through=None):
         """Run the loaded plan from its first open step. Pauses for admin work, a question, a failed or
         blocked step, a pilot error, or the operation budget."""
         from . import pilot as pilot_module
@@ -1587,9 +2168,8 @@ class Session:
         self.notes = getattr(self, "notes", [])
         log, reason = [], "budget"
         self.status = "piloting"
-        self.pilot_stop_requested = False
         for _ in range(max_ops):
-            if self.pilot_stop_requested:
+            if getattr(self, "pilot_stop_requested", False) or getattr(self, "closed", False):
                 reason = "stopped by the orchestrator"
                 break
             if self.pending_checkpoint():
@@ -1620,10 +2200,16 @@ class Session:
                     break
             with self.lock:
                 self.observe()
+            decision_scope = getattr(self, "scope_revision", 0)
+            decision_observation = getattr(self, "observation", {}).get("id")
             try:
                 op, meta = pilot_module.choose(self, step, log)
-            except (ValueError, RuntimeError) as error:  # Provider errors (HTTP 4xx/5xx) pause, never crash.
+            except (ValueError, RuntimeError) as error:  # Provider failures need an explicit coordination request.
                 reason = f"pilot error: {error}"
+                self.checkpoint(reason, source="pilot")
+                break
+            if getattr(self, "pilot_stop_requested", False) or getattr(self, "closed", False):
+                reason = "stopped by the orchestrator"
                 break
             self.log("pilot", step=step["n"], model=meta.get("model"), latency_ms=meta.get("latency_ms"), **op)
             self.say(f"Pilot: {op['reason'] or op['op']}", speak=False)
@@ -1633,11 +2219,32 @@ class Session:
                 if op["ui"] not in flags:
                     flags.append(op["ui"])
                     self.log("ui_flag", step=step["n"], what=op["ui"], frame=self.save_frame("ui"))
-            outcome = self._pilot_run(op, step)
+            try:
+                if getattr(self, "coordination", None):
+                    try:
+                        self._narration_boundary()
+                    except (ControlError, RuntimeError) as error:
+                        self.checkpoint(f"Narration paused: {error}", source="pilot")
+                        reason = "narration needs attention"
+                        break
+                    if self.pilot_stop_requested or decision_scope != self.scope_revision:
+                        reason = "paused or instructions changed during decision; fresh observation required"
+                        break
+                    with self.command_context("pilot", observation_id=decision_observation):
+                        outcome = self._pilot_run(op, step)
+                else:
+                    outcome = self._pilot_run(op, step)
+            except CodexError as error:
+                reason = f"pilot error: {error}"
+                break
             if op.get("say") and not outcome.startswith("refused"):
                 self.say(op["say"])  # The pilot's bottom-line progress update is the only routine speech.
             log.append({"step": step["n"], **{k: v for k, v in op.items() if k != "reason"}, "outcome": outcome})
             self.log("pilot_outcome", step=step["n"], op=op["op"], outcome=outcome)
+            if getattr(self, "manual_steps", False):
+                self._pause_requested = True
+                reason = "manual step complete"
+                break
             if op["op"] in {"admin", "ask"}:
                 reason = op["op"]
                 break
@@ -1672,8 +2279,28 @@ class Session:
     def _pilot_run(self, op, step):
         kind = op["op"]
         try:
+            if kind == "inspect":
+                evidence = self.cmd_inspect(op.get("ref"))
+                step["inspection"] = {k: v for k, v in evidence.items() if k not in {"crop", "raw_frame"}}
+                return "inspected fresh screenshot, target crop and resource readiness; choose again visually"
+            if kind == "wait":
+                time.sleep(min(3, max(0.05, op.get("seconds", 0.5))))
+                with self.lock:
+                    self.observe()
+                return "waited for rendering; fresh visual observation captured"
             if kind == "do":
-                result = self.do(op["intent"], op["hints"], op.get("max_steps", 6), op.get("until_text"),
+                if getattr(self, "visual_mode", None) == "primary":
+                    self.set_goal(op["intent"])
+                    self.avoid = [a.lower() for a in op.get("avoid", ())]
+                    self.allow_values = [v.lower() for v in op.get("allow_values", ())]
+                    self.read_only = op.get("read_only", False)
+                    for hint in op.get("hints", ()):
+                        self.add_hint(hint)
+                    proposal = self.suggest("stack")["proposal"]
+                    return (f"stack proposed {proposal['ref']}: {proposal['label']}; no action executed. "
+                            "Inspect the fresh screen and choose act, change the approach, or record a finding.")
+                result = self.do(op["intent"], op["hints"],
+                                 1 if getattr(self, "visual_mode", None) == "primary" else op.get("max_steps", 6), op.get("until_text"),
                                  op.get("until_url"), avoid=op.get("avoid", ()), allow_values=op.get("allow_values", ()),
                                  read_only=op.get("read_only", False))
                 proposal = result.get("proposal") or {}
@@ -1682,8 +2309,17 @@ class Session:
                 return (f"stack ran: {ran}. Paused: {result['paused']}; now at {result['url']}"
                         + (f"; unexecuted proposal: {pending}" if pending else "")
                         + (f"; stack says: {why}" if why else ""))
+            if kind == "hover":
+                result = self.hover(op["ref"])
+                return f"pilot hovered {result.get('label')}; now at {result.get('url')}"
+            if kind == "visual_hover":
+                result = self.visual_hover(op["x"], op["y"])
+                return f"pilot hovered {result.get('label')}; now at {result.get('url')}"
+            if kind == "visual_act":
+                result = self.visual_act(op["x"], op["y"], text=op.get("text"))
+                return f"pilot {result['kind']} {result.get('label')}; now at {result.get('url_after')}"
             if kind == "act":
-                result = self.act(op["ref"], text=op.get("text"), by="pilot")
+                result = self.act(op["ref"], text=op.get("text"), option=op.get("option"), by="pilot")
                 return f"pilot {result['kind']} {result.get('label')}; now at {result.get('url_after')}"
             if kind == "check":
                 result = self.check(op.get("text"), op.get("absent"), op.get("url"), op.get("link"), op.get("href"))
@@ -1719,7 +2355,7 @@ class Session:
                     return ("refused: this step has findings (" + "; ".join(f["what"] for f in serious)[:200]
                             + "); mark it fail with the finding in the note")
                 self.mark(step["n"], op["status"], f"Pilot: {op['note']}", recap=not op.get("say"))
-                return f"marked {op['status']}"
+                return f"marked {step['status']}"
             if kind == "finding":
                 finding = {k: op.get(k) for k in ("severity", "what", "expected", "actual", "workaround")}
                 step.setdefault("findings", []).append(finding)
@@ -1737,12 +2373,40 @@ class Session:
             if kind == "ask":
                 cp = self.checkpoint(f"Question: {op['question']}", source="pilot")["checkpoint"]
                 return f"question {cp['id']} raised"
-        except SessionError as error:
+        except (SessionError, ControlError) as error:
             return f"refused: {error}"
         return "unknown operation"
 
-    def cmd_audio(self, bluetooth=None, wake_seconds=None):
+    def cmd_finding(self, step, what, severity="medium", expected=None, actual=None, workaround=None):
+        if not self.test or not 1 <= int(step) <= len(self.test["steps"]):
+            raise SessionError("Finding needs a step in the current plan")
+        if severity not in {"high", "medium", "low"} or not str(what).strip():
+            raise SessionError("Finding needs a description and severity high, medium, or low")
+        finding = {"what": str(what)[:1000], "severity": severity, "expected": expected,
+                   "actual": actual, "workaround": workaround,
+                   "observation_id": getattr(self, "observation", {}).get("id")}
+        self.test["steps"][int(step) - 1].setdefault("findings", []).append(finding)
+        self.log("finding", step=int(step), frame=self.save_frame("finding"), **finding)
+        self.write_run_summary()
+        return {"finding": finding, **self.summary()}
+
+    def cmd_audio(self, bluetooth=None, wake_seconds=None, mode=None, padding_ms=None, skip=False, retry=False, muted=None):
         """Show or change narration audio settings for this session."""
+        if muted is not None:
+            self.narrator.muted = bool(muted)
+            if muted:
+                self.narrator.skip()
+        if mode is not None:
+            if mode not in {"fast", "follow", "step"}:
+                raise SessionError("Audio mode must be fast, follow, or step")
+            self.follow_along = mode in {"follow", "step"}
+            self.manual_steps = mode == "step"
+        if padding_ms is not None:
+            self.padding_ms = max(0, min(5000, int(padding_ms)))
+        if skip:
+            self.narrator.skip()
+        if retry and self.narrator.spoken:
+            self.narrator.say(self.narrator.spoken[-1])
         if bluetooth is not None:
             self.narrator.bluetooth = bool(bluetooth)
         if wake_seconds is not None:
@@ -1775,11 +2439,15 @@ class Session:
 
     def cmd_pilot(self, max_ops=150, through=None, detach=True):
         """Start the pilot in the background and return at once; monitor with events/wait/progress."""
-        if not detach:
-            return self.pilot(max_ops, through)
+        if getattr(self, "closed", False):
+            raise SessionError("The session is closed")
         runner = getattr(self, "pilot_thread", None)
         if runner and runner.is_alive():
             raise SessionError("The pilot is already running; use `pilot stop` or watch it with `events --follow`")
+
+        self.pilot_stop_requested = False
+        if not detach:
+            return self.pilot(max_ops, through)
 
         def work():
             try:
@@ -1790,12 +2458,17 @@ class Session:
                 self.log("error", error=repr(error))
             self.log("pilot_end", paused=self.pilot_result.get("paused"))
 
-        self.pilot_result = None
-        self.pilot_reported = False
-        self.pilot_thread = threading.Thread(target=work, daemon=True)
-        self.last_activity = time.monotonic()
-        self.pilot_thread.start()
-        threading.Thread(target=self._watchdog, args=(self.pilot_thread,), daemon=True).start()
+        with self.lock:
+            runner = getattr(self, "pilot_thread", None)
+            if runner and runner.is_alive():
+                raise SessionError("The pilot is already running; use `pilot stop` or watch it with `events --follow`")
+
+            self.pilot_result = None
+            self.pilot_reported = False
+            self.pilot_thread = threading.Thread(target=work, daemon=True)
+            self.last_activity = time.monotonic()
+            self.pilot_thread.start()
+            threading.Thread(target=self._watchdog, args=(self.pilot_thread,), daemon=True).start()
         return {"started": True, "from_ref": len(self.__dict__.get("feed", [])), **self.summary()}
 
     STALL_SECONDS = int(setting("REVERIE_STALL_SECONDS", "240"))
@@ -1823,6 +2496,12 @@ class Session:
             runner.join(timeout)
         return {"stopped": not (runner and runner.is_alive()), **self.summary()}
 
+    def cmd_progress(self):
+        batch = self.cmd_events(limit=8)
+        batch["events"] = batch["events"][-8:]
+        batch["checkpoints"] = [c for c in self.checkpoints if c["status"] == "pending"]
+        return batch
+
     def cmd_events(self, since=None, limit=200):
         feed = self.__dict__.get("feed", [])
         if since is None:  # No cursor: show the latest events, not the first ones.
@@ -1846,7 +2525,18 @@ class Session:
         return self.do(intent, hints or [], max_steps, until_text, until_url, min_confidence)
 
     def close(self):
+        from ..codex_provider import close as close_codex
+        from ..codex_provider import shutdown as shutdown_codex
+
         self.closed = True
+        self.pilot_stop_requested = True
+        shutdown_codex()
+        runner = getattr(self, "pilot_thread", None)
+        if runner is not None and runner is not threading.current_thread():
+            runner.join(timeout=5)
+        close_codex()
+        if self.test and self.test.get("result") == "running":
+            self.test["result"] = "incomplete"
         self.log("stop", steps=len(self.history), test=self.test)
         self.write_run_summary(ended=time.strftime("%Y-%m-%dT%H:%M:%S"))
         self.narrator.drain(5)

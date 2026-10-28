@@ -1,0 +1,17 @@
+{
+  "name": "reverie-qa",
+  "displayName": "Reverie QA",
+  "version": "0.1.0",
+  "description": "Coordinate Reverie browser smoke tests, evidence, requests, and retained results.",
+  "author": {"name": "Reverie"},
+  "license": "MIT",
+  "mcpServers": {
+    "reverie": {
+      "command": "python",
+      "args": ["-m", "reverie.control.mcp", "--root", "${CLAUDE_PROJECT_DIR}", "--claude-channel"]
+    }
+  },
+  "channels": [
+    {"server": "reverie"}
+  ]
+}

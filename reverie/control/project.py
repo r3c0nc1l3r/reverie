@@ -24,7 +24,7 @@ from ..settings import setting
 NAME = ".reverie"
 LEGACY = Path("artifacts") / "agent-sessions"
 
-GITIGNORE = "runs/\ncache/\ndownloads/\n"
+GITIGNORE = "runs/\ncache/\ndownloads/\nstate.sqlite3*\n"
 
 README = """# .reverie
 
@@ -35,9 +35,10 @@ Reverie keeps its project state here. AI agents drive the tests; this directory 
 - `specs/`: stored test specs. Load one with `reverie spec .reverie/specs/<file>.md`.
 - `cache/`: disposable caches, such as synthesized narration audio.
 - `downloads/`: browser downloads when the Docker launcher runs Reverie.
+- `state.sqlite3`: shared coordination state for logical test sessions and browser workers.
 - `playbook.json`: lessons the pilot learned per host. Commit it if the lessons help other agents.
 
-`runs/`, `cache/`, and `downloads/` are ignored by git (see `.gitignore`). Review runs with `reverie ui`.
+`runs/`, `cache/`, `downloads/`, and `state.sqlite3` are ignored by git (see `.gitignore`). Review runs with `reverie ui`.
 """
 
 SPECS_README = """# Specs
@@ -93,6 +94,11 @@ def reverie_dir(start=None):
     except OSError:
         pass
     return path
+
+
+def coordination_path(start=None):
+    """The project's durable shared-state database, created by ``CoordinationStore`` on first use."""
+    return reverie_dir(start) / "state.sqlite3"
 
 
 def runs_dir(start=None):

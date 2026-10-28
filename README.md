@@ -2,7 +2,9 @@
 
 # Reverie
 
-Reverie runs browser tests from Markdown specs. A decision engine makes each click, a multimodal pilot runs the spec step by step, and you control everything from a terminal CLI.
+Reverie runs browser tests from Markdown specs. A decision engine makes each click, a multimodal pilot runs the spec step by step, and you control everything from a terminal CLI. Group each investigation into a testing session, follow its live evidence, and take control at a safe boundary.
+
+Screenshot masking is best effort: unsupported fields can stay visible. Do not use real secrets without your own review.
 
 Reverie is the agent operation mode of [laya-ultrafast](https://github.com/Command-Perception/laya-ultrafast) as its own project. The browser agent, DOM snapshot, and executor come from [ipenywis/laya-ultrafast](https://github.com/ipenywis/laya-ultrafast) and [Browser Use's jev-ultrafast](https://github.com/browser-use/jev-ultrafast) (MIT).
 
@@ -17,7 +19,7 @@ Reverie is the agent operation mode of [laya-ultrafast](https://github.com/Comma
 | Pilot (multimodal model, OpenRouter) | Runs the spec: sends intents, checks results, marks steps, records findings, reviews each step's screenshots, and speaks short progress updates. |
 | Orchestrator (you or an agent) | Starts sessions and specs, signs in, handles checkpoints (database and mail proof), and reviews verdicts. |
 
-Guards keep the run safe: commit buttons (Save, Delete, Confirm, and similar) need an explicit intent, the stack types only stated values, and loops and stalls end in a checkpoint instead of repetition. Tokens and codes are masked in trails and model context.
+Guards keep the run safe: commit buttons (Save, Delete, Confirm, and similar) need an explicit intent, the stack types only stated values, and loops and stalls end in a checkpoint instead of repetition. Recognized tokens and codes are redacted in trails and model text. Screenshot masking is best effort.
 
 ## Setup
 
@@ -53,6 +55,8 @@ The pilot and the text helper call any OpenAI-compatible chat endpoint.
 
 With `openrouter`, the key falls back to `OPENROUTER_API_KEY`. With `opencode-go`, reverie reads the key from `OPENCODE_GO_API_KEY` or from OpenCode's `~/.local/share/opencode/auth.json` (`OPENCODE_AUTH_FILE` points it at another file, such as Pi's `~/.pi/agent/auth.json`). It sends the `reverie/<version>` user agent and one `x-opencode-session` id per process, as OpenCode Go requires. Example: `REVERIE_PILOT_PROVIDER=opencode-go` and `REVERIE_PILOT_MODEL=glm-5.3-flash`.
 
+For an installed Codex CLI with an existing local sign-in, set `REVERIE_PILOT_PROVIDER=codex` and `REVERIE_PILOT_MODEL=gpt-6.1-terra`. This uses a restricted local app-server instead of an HTTP key. Reverie does not read or copy authentication files. Jev remains the separate default decision engine. See [Codex pilot](docs/codex-pilot.md) for setup, restrictions, and optional text-helper routing.
+
 ### Decision engines
 
 Layer 1, the decision engine, makes each click and keystroke. Layer 2, the escalation model (the text model, Mercury by default), steps in when the decision engine is unsure.
@@ -60,11 +64,16 @@ Layer 1, the decision engine, makes each click and keystroke. Layer 2, the escal
 | Engine | Where it runs | Needs | Choose it with |
 |---|---|---|---|
 | Jev (default) | Hosted on OpenRouter's Decisions API (`typesafe/jev-1.13`; `REMOTE_DECISION_MODEL` overrides it) | `OPENROUTER_API_KEY` | nothing, or `--engine jev` |
+| Liquid (experimental) | Hosted on the same Decisions API (`liquid/d1-ultra`) | the same `OPENROUTER_API_KEY`; no separate Liquid key | `reverie start --engine liquid`, or `REVERIE_DECISION_ENGINE=liquid` |
 | Laya | Locally, through laya.cpp (`LAYA_BASE_URL`) or MLX (`LAYA_BACKEND=mlx`, the `mlx` extra) | a local model server, no key | `reverie start --engine laya`, or `REVERIE_DECISION_ENGINE=laya` |
 
 The session's engine drives `do`, `auto`, and the pilot. `suggest`, `auto`, and `step` also take `--engine` for one command. Without a key, a Jev session refuses to start and says how to fix it: set `OPENROUTER_API_KEY`, or choose Laya. Jev picks the element; the text helper supplies any value to type before anything runs, so the stated-value guard applies to every engine. A Jev decision costs about $0.0001 and takes about 250 ms. `scripts/jev-smoke.sh` runs a live check (opt-in; `--e2e` also runs a WidgetLab spec headless with Jev).
 
-Proposals, the run trail, and the dashboard name layers by role: `decision` (with `decision_engine`: `jev` or `laya`) and `escalation`. Runs recorded before the rename, which used `laya`, `jev`, and `mercury`, still display.
+Liquid uses fresh screenshots by default, with structured page data and observed-target geometry. Missing or stale screenshots stop the decision. Screenshots are sent to OpenRouter; use approved test content. Set `REVERIE_LIQUID_MODEL` to change its model, or `REVERIE_DECISION_IMAGES=off` for a text-only comparison. Jev stays text-only by default; `REVERIE_DECISION_IMAGES=on` enables its screenshot input too. Start a new session after changing these settings.
+
+Ultra has a 32K context, smaller than Jev's advertised 262K. Large field values can exceed it, and Reverie does not automatically compact the state or switch models. See the [evaluation and limitations](docs/eval/liquid-vs-jev.md). Jev remains the default.
+
+Proposals, the run trail, and the dashboard name layers by role: `decision` (with `decision_engine`: `jev`, `laya`, or `liquid`) and `escalation`. Runs recorded before the rename, which used `laya`, `jev`, and `mercury`, still display.
 
 ### Renamed settings
 
@@ -102,8 +111,59 @@ Other ways to drive a session:
 - `do "<intent>"`: the stack carries out one intent.
 - `suggest`, then `accept` or `reject --hint`: one step at a time.
 - `observe`, `act e5 --text ...`, `check --text ...`: direct control.
+- `expand REF`, then `bucket_back` or `bucket_root`: navigate large action groups without dropping controls.
+- `hover REF` or `visual-hover X Y`: open hover menus through guarded pointer movement without clicking.
+- `visual-act X Y`: use a fresh screenshot point for an unlisted control. Freshness, hit-test, intent, stated-value, and secret-entry guards still apply.
 
 Exit codes: 0 ok, 1 check failed, 2 refused, 3 error, 4 no session.
+
+## Testing sessions and human control
+
+A testing session groups an investigation. A browser worker can create several attempts as plans and retries progress. Earlier attempts stay available beside current work.
+
+```bash
+reverie sessions create 'Demo app · visual smoke' --id demo-smoke
+reverie --session admin start --url http://localhost:8080 \
+  --testing-session demo-smoke --follow-along --padding-ms 350
+reverie --session admin spec path/to/test.md
+reverie --session admin pilot
+reverie ui
+```
+
+Select the investigation in the dashboard to see its workflows, roles, attempts, findings, and live frame. Connection health, frame age, application waiting, and narration holds have separate states. An authenticated WebSocket carries live updates and reconnect snapshots. Selecting recorded evidence holds that frame until **Back to live**.
+
+**Follow along** waits for actual narration playback to finish plus the remaining 350 ms. Preparation overlaps speech, so slow page or model work does not add another full pause. **Fast** continues without waiting. **One operation at a time** returns control after one operation.
+
+```bash
+reverie --session admin control pause
+reverie --session admin control take
+reverie --session admin --actor human act e7
+reverie --session admin control release
+reverie --session admin control resume
+```
+
+Takeover invalidates earlier control epochs and pending proposals. Agents can claim and resolve durable requests. CLI state and changes, plus the [MCP adapter and portable plugins](docs/agent-integrations.md), expose the same coordination state. See [testing sessions](docs/testing-sessions.md) for cursor, retry, narration, and retention contracts.
+
+Successful temporary evidence is eligible for cleanup after 24 hours. Failed, blocked, incomplete, untriaged, active, pinned, and retained work is protected. Cleanup previews changes by default and preserves result metadata.
+
+```bash
+reverie runs pin <run-id>
+reverie runs triage <run-id> --triage confirmed
+reverie runs expire                 # preview
+reverie runs expire --apply         # remove eligible evidence
+```
+
+Use the [synthetic smoke lab](examples/smoke-lab/README.md) to explore delayed icons, missing visuals, overlays, and small targets. [Action buckets](docs/action-buckets.md) keep every control reachable on larger pages.
+
+## Screenshot privacy
+
+Screenshot masking is **best effort, not a guarantee**. Unsupported fields and masking faults can leave sensitive content visible. Do not point Reverie at real secrets without your own review; prefer synthetic test data and inspect screenshots before sharing.
+
+Reverie attempts field-local opaque stripes on populated password, OTP, authentication-code and tracked sensitive fields. Empty native fields keep placeholders and borders visible; filled borders remain visible where practical. Matching uses exact values or Unicode NFKC equality, with no numeric-substring matching or stale-target fan-out. `REVERIE_SECRET_SELECTORS` accepts a trusted JSON array for form or text fields. Invalid entries and masking faults produce sanitized warnings while keeping the fresh capture when possible. Masks do not establish hidden values or controls. Existing frames, clips and in-flight images are not recalled. See [configuration and limits](docs/screenshot-privacy.md).
+
+Masking is on by default. Set `REVERIE_MASK_SECRETS=0` in the environment or `.env` before starting a new session to turn it off for frames, clips and UI review. **Turning it off writes any visible secrets into frames and clips**, and UI review receives those native page values. Native password fields keep the browser’s normal password bullets. Text and trail redaction remain unchanged. `false`, `off` and `no` also turn masking off; unrecognized values keep it on. An existing session daemon retains its environment. Trusted selectors apply only while masking is on.
+
+UI review uses verified images produced by the session’s capture pipeline. Altered, missing or unregistered final evidence requires a fresh capture or a declined review. Provenance does not change the best-effort masking limits.
 
 ## Downloads
 
@@ -130,9 +190,10 @@ uv run reverie init          # create .reverie/ with a README, a .gitignore, run
 | `.reverie/runs/<session>-<stamp>/` | One run: `trail.jsonl` (every event, the source of truth), `run.json` (spec id, title, verdict, steps done), and `frames/` for replay. |
 | `.reverie/specs/` | Stored specs. The README there describes the format. |
 | `.reverie/cache/` | Disposable caches, such as narration audio. |
+| `.reverie/state.sqlite3` | Testing sessions, durable events, requests, worker ownership, and evidence lifetime metadata. |
 | `.reverie/playbook.json` | Lessons the pilot keeps per host. `REVERIE_PLAYBOOK` overrides the path. |
 
-Git ignores `runs/` and `cache/`. `init` is safe to run again; it creates only what is missing.
+Git ignores runs, caches, downloads, and the coordination database and its journal files. `init` is safe to run again; it creates only what is missing.
 
 Review history and the current run in the dashboard:
 

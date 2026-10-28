@@ -3,6 +3,7 @@
 import shutil
 import socket
 import subprocess
+import sys
 import time
 from pathlib import Path
 
@@ -10,6 +11,7 @@ import httpx
 
 from ..settings import setting
 from . import downloads
+from .display import resolve_display
 
 CANDIDATES = ("chromium", "google-chrome-stable", "google-chrome", "brave", "chromium-browser")
 
@@ -53,11 +55,17 @@ class Chromium:
             "--disable-features=Translate,MediaRouter",
             "--password-store=basic",
         ]
+        env = None
         if not headed:
             args.append("--headless=new")
+        elif sys.platform.startswith("linux"):
+            env = resolve_display()
+            backend = "x11" if env.get("DISPLAY") else "wayland"
+            args.append(f"--ozone-platform={backend}")
+            print(f"Chromium display backend: {backend}", file=sys.stderr, flush=True)
         args.append("about:blank")
         self.process = subprocess.Popen(
-            args, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True
+            args, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True, env=env
         )
         deadline = time.monotonic() + 20
         while time.monotonic() < deadline:

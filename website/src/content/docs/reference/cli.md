@@ -11,9 +11,9 @@ Global options go before the command name. `--json` also works anywhere on the l
 
 | Option | Default | Description |
 | --- | --- | --- |
-| `--session NAME` | `$REVERIE_SESSION`, else `default` | The session to talk to. Every command except `init`, `runs`, `walkthrough`, `ui` and `start` (which creates the session) needs a running session with this name. |
+| `--session NAME` | `$REVERIE_SESSION`, else `default` | The session to talk to. Browser commands address this worker. Logical-session and evidence commands can run without a browser worker. |
 | `--json` | off | Print the raw JSON result instead of the formatted text. |
-| `--version` | | Print the version (`reverie 0.1.0`) and exit. |
+| `--version` | | Print the version (`reverie 0.2.0`) and exit. |
 | `-h`, `--help` | | Show help for `reverie` or for any command. |
 
 ### How the session name is chosen
@@ -96,6 +96,16 @@ reverie walkthrough [--write SPEC] [--root ROOT] run
 | `--write SPEC` | off | Replace or add the `## Walkthrough` section of this spec file. |
 | `--root ROOT` | `.reverie/runs` and the legacy folder | Read runs from this directory. Repeatable. |
 
+## Testing sessions and coordination
+
+Use `sessions create TITLE --id ID` to start an investigation, `sessions attach ID` to select it for newly started workers, and `sessions list` or `sessions archive ID` to manage it. Start workers with `--testing-session ID`.
+
+`state --json` returns an atomic snapshot. `changes --after CURSOR --timeout 20 --json` returns durable changes. Preserve the per-session event cursor separately from the state revision. Stable `--operation-id` values must only be reused with identical arguments and control identity.
+
+`control pause`, `control take`, `control release`, and `control resume` coordinate human handoff. Authorized manual commands after takeover use the global `--actor human` option. Use `request claim` and `request resolve` for durable requests.
+
+`runs pin ID`, `runs triage ID --triage confirmed`, and `runs expire` manage evidence. Expiry previews by default; `--apply` removes only eligible artifacts and keeps result metadata. See [testing sessions](/reverie/guides/testing-sessions/) for full ownership, retry, narration, and retention contracts.
+
 ## Session lifecycle
 
 ### `start`
@@ -103,9 +113,10 @@ reverie walkthrough [--write SPEC] [--root ROOT] run
 Open a headed, narrated browser session in the background. The command waits up to 60 seconds for it to be ready, then prints its status. It exits with code `2` if the session name is already running.
 
 ```text
-reverie start --url URL [--voice VOICE] [--goal GOAL] [--engine {laya,jev}]
+reverie start --url URL [--voice VOICE] [--goal GOAL] [--engine {laya,jev,liquid}]
               [--trail-dir TRAIL_DIR] [--profile PROFILE] [--download-dir DOWNLOAD_DIR]
               [--headless] [--ui] [--bluetooth]
+              [--testing-session ID] [--follow-along] [--padding-ms 350]
 ```
 
 | Option | Default | Description |
@@ -113,7 +124,7 @@ reverie start --url URL [--voice VOICE] [--goal GOAL] [--engine {laya,jev}]
 | `--url URL` | required | The page to open. |
 | `--voice VOICE` | `auto` | Narration voice. One of `auto`, `kitten`, `kokoro`, `fish`, `espeak`, `spd`, `off`. |
 | `--goal GOAL` | none | Goal for autonomous `step` and `run`. |
-| `--engine {laya,jev}` | `$REVERIE_DECISION_ENGINE`, else `jev` | The session's decision engine: `jev` (hosted, the default, needs `OPENROUTER_API_KEY`) or `laya` (local laya.cpp or MLX, no key). It drives `do`, `auto`, `step`, `run` and the pilot. Without a key, a Jev session refuses to start and says to set the key or use `--engine laya`. See [Decision engines](/reverie/reference/models/#decision-engines). |
+| `--engine {laya,jev,liquid}` | `$REVERIE_DECISION_ENGINE`, else `jev` | The session's decision engine: `jev` (hosted, the default, needs `OPENROUTER_API_KEY`), `laya` (local laya.cpp or MLX, no key), or experimental `liquid` (the same OpenRouter key). It drives `do`, `auto`, `step`, `run` and the pilot. Without a key, a Jev session refuses to start and says to set the key or use `--engine laya`. See [Decision engines](/reverie/reference/models/#decision-engines). |
 | `--trail-dir TRAIL_DIR` | none | Directory for the session's trail. |
 | `--profile PROFILE` | per-session, isolated | Chromium profile directory. |
 | `--download-dir DOWNLOAD_DIR` | `$REVERIE_DOWNLOAD_DIR`, else `downloads/` in the run folder | Save browser downloads here. It never defaults to `~/Downloads`. |
@@ -157,6 +168,7 @@ Show or set narration audio. With no options it shows the current settings.
 
 ```text
 reverie audio [--bluetooth {on,off}] [--wake WAKE]
+              [--mode {fast,follow,step}] [--padding-ms 350] [--skip]
 ```
 
 | Option | Default | Description |
@@ -377,12 +389,12 @@ Use these when you want to approve each move yourself.
 The decision engine proposes one step. Nothing runs until `accept`.
 
 ```text
-reverie suggest [--engine {stack,escalation,mercury,laya,jev}] [--hint HINT] [--goal GOAL]
+reverie suggest [--engine {stack,escalation,mercury,laya,jev,liquid}] [--hint HINT] [--goal GOAL]
 ```
 
 | Option | Default | Description |
 | --- | --- | --- |
-| `--engine` | `stack` | `stack`: the decision engine proposes and the escalation model overrules when it is unsure. `escalation` (old name `mercury`, still accepted): the escalation model alone. `laya` or `jev`: that decision engine alone, for this one command. |
+| `--engine` | `stack` | `stack`: the decision engine proposes and the escalation model overrules when it is unsure. `escalation` (old name `mercury`, still accepted): the escalation model alone. `laya`, `jev`, or `liquid`: that decision engine alone, for this one command. |
 | `--hint HINT` | none | Steer the model, for example `use the search box, not the menu`. |
 | `--goal GOAL` | none | Goal for this suggestion. |
 
@@ -409,13 +421,13 @@ reverie reject [--hint HINT]
 A fast loop of decision-engine steps. It pauses on low confidence, on DONE, BLOCKED or ADMIN, or when an until-condition is met.
 
 ```text
-reverie auto [--engine {stack,escalation,mercury,laya,jev}] [--max MAX] [--min-confidence CONF]
+reverie auto [--engine {stack,escalation,mercury,laya,jev,liquid}] [--max MAX] [--min-confidence CONF]
              [--until-text TEXT] [--until-url URL] [--goal GOAL]
 ```
 
 | Option | Default | Description |
 | --- | --- | --- |
-| `--engine` | `stack` | As for `suggest`: `stack`, `escalation` (old name `mercury`), `laya` or `jev`. |
+| `--engine` | `stack` | As for `suggest`: `stack`, `escalation` (old name `mercury`), `laya`, `jev`, or `liquid`. |
 | `--max MAX` | `8` | The most steps to take. |
 | `--min-confidence CONF` | `0.55` | Pause when confidence drops below this. |
 | `--until-text TEXT` | none | Stop when this text appears. |
@@ -427,14 +439,14 @@ reverie auto [--engine {stack,escalation,mercury,laya,jev}] [--max MAX] [--min-c
 Autonomous driving with a decision engine. `step` takes one step. `run` loops.
 
 ```text
-reverie step [--goal GOAL] [--engine {laya,jev}] [--confirm]
-reverie run  [--goal GOAL] [--engine {laya,jev}] [--confirm] [--max-steps MAX_STEPS]
+reverie step [--goal GOAL] [--engine {laya,jev,liquid}] [--confirm]
+reverie run  [--goal GOAL] [--engine {laya,jev,liquid}] [--confirm] [--max-steps MAX_STEPS]
 ```
 
 | Option | Default | Description |
 | --- | --- | --- |
 | `--goal GOAL` | none | The goal. |
-| `--engine {laya,jev}` | the session's engine | The decision engine to use for this command. |
+| `--engine {laya,jev,liquid}` | the session's engine | The decision engine to use for this command. |
 | `--confirm` | off | Ask in the window before each action. |
 | `--max-steps MAX_STEPS` | `20` | `run` only. The most steps to take. |
 
@@ -493,12 +505,13 @@ uv run reverie --session demo fill e4 --text "tomsmith"
 uv run reverie --session demo click --label "Login"
 ```
 
-### `hover`
+### `hover` and `visual-hover`
 
-Move the pointer over an element. Use it to open hover menus.
+Move the pointer over an observed element, or a point in a fresh screenshot, to open a hover menu. `visual-hover` uses viewport CSS pixels. The guarded executor refuses stale or protected targets and their associated label controls; no click or text input is sent.
 
 ```text
 reverie hover [--label LABEL] [ref]
+reverie visual-hover X Y
 ```
 
 ### `dialog`
@@ -537,6 +550,12 @@ Press a key.
 ```text
 reverie press {Enter,Tab,Escape}
 ```
+
+### `expand`, `bucket_back`, `bucket_root`, and `visual-act`
+
+`expand REF` opens an action group. `bucket_back` and `bucket_root` navigate its parents without browser input. Every observed control remains reachable on large pages.
+
+`visual-act X Y` accepts viewport CSS pixels from a fresh screenshot. The executor requires matching page state, hit-tests the point, and applies the normal intent and stated-value guards. Password, hidden, file, disabled, inert, and label targets are refused. See [action buckets and visual actions](/reverie/guides/action-buckets/).
 
 ## Tabs and navigation
 

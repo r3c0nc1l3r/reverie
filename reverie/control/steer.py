@@ -27,6 +27,9 @@ Rules:
 - Use ADMIN when the test needs a terminal action that only the orchestrator can run (for example test data is
   already used up, a fixture must be reset, or a record is missing). Say what is needed in "reason".
   Never put a command in your answer.
+- An element with kind expand is a group of observed actions. Choose its id to inspect its children;
+  this is read-only navigation. Choose bucket_back to return one level or bucket_root to see all groups.
+  For grouped dropdowns, current_value shows the selected value; expand the group to choose an option.
 - Elements marked offscreen are real controls further up or down the page; choose them directly, the
   executor scrolls to them. Prefer them over Scroll actions.
 - The tabs list shows every open tab. Choose TAB:<n> to switch when the goal continues in another tab
@@ -39,16 +42,21 @@ Rules:
 
 
 def element_rows(actions, limit=250):
+    if len(actions) > limit:
+        raise ValueError("Action list exceeds the presentation limit; register buckets before building rows")
     rows = []
-    for action in actions[:limit]:
+    for action in actions:
         row = {k: action[k] for k in ("id", "kind", "role", "label", "value", "hint", "checked", "expanded",
-                                      "offscreen") if action.get(k) not in (None, "")}
+                                      "offscreen", "count", "current_value") if action.get(k) not in (None, "")}
         rows.append(row)
     return rows
 
 
 def escalation_choose(goal, page, history, hints=(), candidates=None, escalation=None, plan=None, tabs=None):
-    actions = page.get("actions", [])
+    from ..actions import bounded
+
+    actions = bounded(page.get("actions", []), page.setdefault("action_buckets", {}), 250)
+    page["actions"] = actions
     context = {
         "goal": goal,
         "goal_plan": plan,
@@ -70,7 +78,14 @@ def escalation_choose(goal, page, history, hints=(), candidates=None, escalation
     for _ in range(3):  # A fast model occasionally emits malformed or doubled JSON; ask again, never guess.
         try:
             output, meta = model.chat_json(DECIDE, context)
-            return validate(output, actions, len(tabs or [])), meta
+            try:
+                return validate(output, actions, len(tabs or [])), meta
+            except (ValueError, KeyError, TypeError) as error:
+                if model.endpoint("text")[2] == "codex":
+                    from ..codex_provider import CodexError
+
+                    raise CodexError("Codex returned an invalid escalation decision; nothing executed.") from None
+                raise error
         except ValueError as error:
             if "TEXT_MODEL_API_KEY" in str(error):
                 raise
