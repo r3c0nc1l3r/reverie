@@ -6,12 +6,6 @@ Reverie runs browser tests from Markdown specs. A decision engine makes each cli
 
 Screenshot masking is best effort: unsupported fields can stay visible. Do not use real secrets without your own review.
 
-[![Watch the Reverie demo](docs/images/reverie-demo-poster.jpg)](https://github.com/r3c0nc1l3r/reverie/releases/download/v0.2.0/reverie-demo.mp4)
-
-**[Watch the demo](https://github.com/r3c0nc1l3r/reverie/releases/download/v0.2.0/reverie-demo.mp4)** · 84 seconds · [Captions](https://github.com/r3c0nc1l3r/reverie/releases/download/v0.2.0/reverie-demo.en.srt) · [Transcript and credits](videos/reverie-demo/README.md)
-
-The demo shows grouped testing sessions, visual checks, follow-along narration, human handoff, and temporary evidence in v0.2.0. All footage uses a synthetic test application.
-
 Reverie is the agent operation mode of [laya-ultrafast](https://github.com/Command-Perception/laya-ultrafast) as its own project. The browser agent, DOM snapshot, and executor come from [ipenywis/laya-ultrafast](https://github.com/ipenywis/laya-ultrafast) and [Browser Use's jev-ultrafast](https://github.com/browser-use/jev-ultrafast) (MIT).
 
 <p align="center"><img src="docs/images/cli.png" alt="Starting a spec run and reading its progress from the terminal" width="90%"></p>

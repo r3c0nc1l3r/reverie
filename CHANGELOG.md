@@ -43,7 +43,7 @@ entries by hand.
 
 ### Documentation
 
-* Add the narrated demo, recorded from the public build, with captions, a poster, and music credits.
+* A demo video will follow.
 * Document Liquid settings, screenshot data sharing, evaluation limits, and its smaller context budget.
 
 ## 0.1.0 (2026-09-28)
